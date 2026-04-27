@@ -1,0 +1,51 @@
+
+[project]
+name = "unicad-torch"
+version = "0.1.0"
+description = "Galaxy: gravitational clustering-based anomaly detection (PyTorch reimplementation)"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "scikit-learn>=1.2",
+    "torch>=2.6.0",
+    "smm>=0.1.5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-cov", "ruff>=0.8", "pyright>=1.1", "mypy>=1.10", "pandas>=2.0", "tqdm>=4.60"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true # Ensures torch only comes from here
+
+[[tool.uv.index]]
+url = "https://mirrors.aliyun.com/pypi/simple/"
+default = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cuda", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+  { index = "pytorch-cuda", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/unicad_torch"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
+# torch type stubs don't export torch.device, torch.float32, etc. even though
+# they are valid public APIs at runtime. This is a known pyright+torch issue.
+reportPrivateImportUsage = false
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
