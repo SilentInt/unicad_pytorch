@@ -18,10 +18,14 @@ import torch.nn.functional as F
 
 from unicad_torch.config import GalaxyConfig
 from unicad_torch.gof import GOFScorer
+from unicad_torch.gravity import (
+    VAR_FLOOR,
+    aggregate_force_scalar,
+    aggregate_force_vector,
+    compute_log_forces,
+)
 from unicad_torch.model import Autoencoder
-from unicad_torch.smm_torch import SMMTorch, _mahalanobis_diag
-
-_VAR_FLOOR = 1e-6
+from unicad_torch.smm_torch import SMMTorch
 
 
 class GalaxyEM:
@@ -39,7 +43,7 @@ class GalaxyEM:
             random_state=config.seed,
         )
 
-        self.scorer = GOFScorer(device=self.device)
+        self.scorer = GOFScorer()
         self.means: torch.Tensor | None = None
         self.weights: torch.Tensor | None = None
         self.covars: torch.Tensor | None = None
@@ -130,7 +134,7 @@ class GalaxyEM:
 
         self.means = self.smm.means_.detach().to(torch.float32)
         self.weights = self.smm.weights_.detach().to(torch.float32)
-        self.covars = self.smm.covars_.detach().clamp(min=_VAR_FLOOR).to(torch.float32)
+        self.covars = self.smm.covars_.detach().clamp(min=VAR_FLOOR).to(torch.float32)
 
     def update_network(self, X: torch.Tensor) -> None:
         """Fine-tune autoencoder with reconstruction + gravity loss (log-space)."""
@@ -151,43 +155,21 @@ class GalaxyEM:
                 "Prototypes not initialized — call update_prototypes first"
             )
 
-        # Pre-compute log|Σ_k| = Σ_d log(σ_kd) — stays finite in any dimension
-        log_det_covars = torch.log(self.covars.clamp(min=_VAR_FLOOR)).sum(dim=1)  # (K,)
-
         for _step in range(self.config.em_finetune_steps):
             self.model.train()
             embed, x_hat = self.model(X)
 
             recon_loss = F.mse_loss(x_hat, X, reduction="sum")
 
-            maha = _mahalanobis_diag(embed, self.means, self.covars)  # (N, K)
-
-            # Log-space force: log F_ik = log(ω_k) - log(π) - 0.5*log|Σ_k| - log(1 + D_M²)
-            log_forces = (
-                torch.log(self.weights.clamp(min=1e-30)).unsqueeze(0)  # (1, K)
-                - torch.log(torch.tensor(torch.pi, dtype=X.dtype, device=X.device))
-                - 0.5 * log_det_covars.unsqueeze(0)  # (1, K)
-                - torch.log1p(maha)  # (N, K)
-            )  # (N, K)
+            log_forces = compute_log_forces(embed, self.means, self.covars, self.weights)
 
             if self.config.gravity_version == "scalar":
-                # log(Σ_k F_k) = logsumexp(log F_k)
-                log_total_force = torch.logsumexp(log_forces, dim=1)  # (N,)
-                gravity_loss = -log_total_force.sum()
+                gravity_loss = -aggregate_force_scalar(log_forces).sum()
 
             elif self.config.gravity_version == "vector":
-                # Vector force: need ||Σ_k F_k * û_k|| in log-space
-                # Scale by max log-force to keep exp() bounded
-                log_max, _ = log_forces.max(dim=1, keepdim=True)  # (N, 1)
-                scaled = torch.exp(log_forces - log_max)  # (N, K) — in [0, 1]
-                unit_vec = F.normalize(
-                    self.means.unsqueeze(0) - embed.unsqueeze(1), p=2, dim=-1
-                )  # (N, K, D)
-                force_vec = (scaled.unsqueeze(2) * unit_vec).sum(dim=1)  # (N, D)
-                force_norm = torch.norm(force_vec, dim=-1).clamp(min=1e-30)  # (N,)
-                # log(||F||) = log(||scaled_F||) + max_log
-                log_force_norm = torch.log(force_norm) + log_max.squeeze(1)
-                gravity_loss = -log_force_norm.sum()
+                gravity_loss = -aggregate_force_vector(
+                    log_forces, self.means, embed
+                ).sum()
 
             else:
                 raise ValueError(

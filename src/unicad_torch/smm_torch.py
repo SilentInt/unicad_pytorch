@@ -4,26 +4,7 @@ from __future__ import annotations
 
 import torch
 
-_VAR_FLOOR = 1e-6
-
-
-def _mahalanobis_diag(
-    X: torch.Tensor,
-    means: torch.Tensor,
-    covars: torch.Tensor,
-) -> torch.Tensor:
-    """Squared Mahalanobis distance with diagonal covariance.
-
-    Args:
-        X: (N, D) data points.
-        means: (K, D) cluster means.
-        covars: (K, D) diagonal variances.
-
-    Returns:
-        (N, K) squared Mahalanobis distances: Σ_d (x_d - μ_kd)² / σ²_kd
-    """
-    diff = X.unsqueeze(1) - means.unsqueeze(0)  # (N, K, D)
-    return (diff**2 / covars.unsqueeze(0).clamp(min=_VAR_FLOOR)).sum(dim=-1)  # (N, K)
+from unicad_torch.gravity import VAR_FLOOR, mahalanobis_diag
 
 
 def _kmeans_pp_init(
@@ -125,7 +106,7 @@ class SMMTorch:
         means = _kmeans_pp_init(Z, K, generator)  # (K, D)
 
         data_var = Z.var(dim=0, unbiased=False, keepdim=True).expand(K, -1)
-        covars = data_var.clamp(min=_VAR_FLOOR).clone()  # (K, D)
+        covars = data_var.clamp(min=VAR_FLOOR).clone()  # (K, D)
 
         weights = torch.full((K,), 1.0 / K, device=device, dtype=dtype)  # (K,)
 
@@ -134,11 +115,9 @@ class SMMTorch:
 
         for _ in range(self.n_iter):
             # ---- E-step ----
-            maha = _mahalanobis_diag(Z, means, covars)  # (N, K)
+            maha = mahalanobis_diag(Z, means, covars)  # (N, K)
 
-            # Log unnormalised responsibilities (paper's density, ν=1):
-            # log τ_ik ∝ log ω_k - 0.5·log|Σ_k| - log(1 + D_M²)
-            log_det = torch.log(covars.clamp(min=_VAR_FLOOR)).sum(dim=1)  # (K,)
+            log_det = torch.log(covars.clamp(min=VAR_FLOOR)).sum(dim=1)  # (K,)
             log_resp = (
                 torch.log(weights.clamp(min=1e-30)).unsqueeze(0)  # (1, K)
                 - 0.5 * log_det.unsqueeze(0)  # (1, K)
@@ -166,7 +145,7 @@ class SMMTorch:
             # σ²_kd = Σ_i τ_ik u_ik (z_id - μ_kd)² / Σ_i τ_ik
             diff = Z.unsqueeze(1) - means.unsqueeze(0)  # (N, K, D)
             covars = (resp_u * diff**2).sum(dim=0) / nk.unsqueeze(1)  # (K, D)
-            covars = covars.clamp(min=_VAR_FLOOR)
+            covars = covars.clamp(min=VAR_FLOOR)
 
             # Reinitialise degenerate components
             empty = nk < 1.0
@@ -175,7 +154,7 @@ class SMMTorch:
                 perm = torch.rand(N, generator=generator, device=device).argsort()
                 new_idx = perm[:n_empty]
                 means[empty] = Z[new_idx]
-                covars[empty] = data_var[:n_empty].clamp(min=_VAR_FLOOR)
+                covars[empty] = data_var[:n_empty].clamp(min=VAR_FLOOR)
                 weights[empty] = 1.0 / K
                 weights = weights / weights.sum()
 

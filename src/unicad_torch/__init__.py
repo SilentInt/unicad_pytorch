@@ -1,6 +1,9 @@
+from importlib.metadata import version as _version
+
 from unicad_torch.adapter import GalaxyADBench
 from unicad_torch.config import GalaxyConfig
 from unicad_torch.galaxy import Galaxy
 from unicad_torch.smm_torch import SMMTorch
 
+__version__ = _version("unicad-torch")
 __all__ = ["Galaxy", "GalaxyADBench", "GalaxyConfig", "SMMTorch"]

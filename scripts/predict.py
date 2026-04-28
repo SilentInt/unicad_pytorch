@@ -41,6 +41,7 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
+from unicad_torch.datasets import find_datasets
 from unicad_torch.galaxy import Galaxy
 
 
@@ -71,37 +72,6 @@ def load_data(path: str) -> tuple[np.ndarray, np.ndarray | None]:
 
 
 # ---------------------------------------------------------------------------
-# Dataset discovery (batch mode)
-# ---------------------------------------------------------------------------
-def find_datasets(
-    data_dir: str, datasets: list[str] | None = None
-) -> list[tuple[str, str]]:
-    """Find .npz/.csv files, optionally filtered by name."""
-    results: list[tuple[str, str]] = []
-    if not os.path.isdir(data_dir):
-        print(f"Data directory not found: {data_dir}")
-        return results
-
-    for root, _dirs, files in os.walk(data_dir):
-        for f in sorted(files):
-            if not (f.endswith(".npz") or f.endswith(".csv")):
-                continue
-            name = os.path.splitext(f)[0]
-            path = os.path.join(root, f)
-            if datasets is None or name in datasets or f in datasets:
-                results.append((name, path))
-
-    if datasets is not None:
-        requested = set(datasets)
-        found = {name for name, _ in results}
-        missing = requested - found
-        if missing:
-            print(f"Warning: datasets not found: {', '.join(sorted(missing))}")
-
-    return results
-
-
-# ---------------------------------------------------------------------------
 # Evaluation
 # ---------------------------------------------------------------------------
 def evaluate(
@@ -109,6 +79,7 @@ def evaluate(
     X: np.ndarray,
     y: np.ndarray | None,
     threshold: float | None,
+    threshold_source: str = "training",
 ) -> dict[str, object]:
     """Score data and compute metrics. Returns a results dict."""
     scores = model.predict_score(X)
@@ -126,6 +97,7 @@ def evaluate(
         "score_max": float(np.max(scores)),
         "score_p50": float(np.median(scores)),
         "threshold": eff_threshold,
+        "threshold_source": threshold_source,
         "n_predicted_anomaly": int(pred_labels.sum())
         if pred_labels is not None
         else None,
@@ -201,7 +173,7 @@ def print_single_report(
     )
 
     thr = result["threshold"]
-    thr_source = "custom" if thr != (evaluate.__defaults__ or [None])[0] else "training"
+    thr_source = result.get("threshold_source", "training")
     print(f"  Threshold: {thr:.4f} (from {thr_source})")
 
     n_pred = result.get("n_predicted_anomaly")
@@ -408,6 +380,7 @@ def main() -> None:
     print()
 
     threshold = args.threshold if args.threshold is not None else model.threshold_
+    threshold_source = "custom" if args.threshold is not None else "training"
 
     # Single file mode
     if args.data:
@@ -421,13 +394,13 @@ def main() -> None:
             scores = model.predict_score(X)
             save_scores(args.output_scores, scores, threshold, y)
         else:
-            result = evaluate(model, X, y, threshold)
+            result = evaluate(model, X, y, threshold, threshold_source)
             result["dataset"] = name
             print_single_report(name, result, y)
 
     # Batch mode
     else:
-        datasets = find_datasets(args.data_dir, args.datasets)
+        datasets = find_datasets(args.data_dir, args.datasets, extensions=(".npz", ".csv"))
         if not datasets:
             print("No datasets found.")
             sys.exit(1)
@@ -440,7 +413,7 @@ def main() -> None:
             print(f"[{i}/{len(datasets)}] {name} ...", end=" ", flush=True)
             try:
                 X, y = load_data(path)
-                result = evaluate(model, X, y, threshold)
+                result = evaluate(model, X, y, threshold, threshold_source)
                 result["dataset"] = name
                 results.append(result)
                 auc = result.get("auc_roc")

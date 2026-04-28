@@ -38,13 +38,16 @@ print(model.fit_info_)                    # {"train_score_mean": ..., "n_exclude
 # Install (with dev tools)
 uv sync --extra dev
 
-# Run diagnostic test
+# Run tests
+uv run pytest tests/ -v
+
+# Run diagnostic test (module-by-module with real data)
 uv run python scripts/test_modules.py
 
 # Lint / format / type check
 uv run ruff check src/ scripts/
 uv run ruff format --check src/ scripts/
-uv run pyright src/
+uv run pyright src/ scripts/
 
 # Download ADBench datasets
 uv run python scripts/download_data.py --category Classical
@@ -63,19 +66,20 @@ uv run python scripts/predict.py --model galaxy.pt --data test.csv --output-scor
 ## Public API
 
 **`Galaxy`** (`galaxy.py`) — main model class:
-- `fit(X_train, y_train=None)` — train the four-stage pipeline; when `y_train` is provided, the true anomaly rate overrides `outlier_ratio` for EM exclusion and threshold computation
+- `fit(X_train, y_train=None)` — train the four-stage pipeline; when `y_train` is provided, the true anomaly rate is used for EM exclusion and threshold computation (stored as `effective_outlier_ratio_`, config is NOT mutated)
 - `predict_score(X)` — return continuous anomaly scores (`np.float32`)
 - `predict(X)` — return binary 0/1 labels using `threshold_` from training (`np.int32`)
 - `fit_predict(X_train, y_train=None)` — fit then return training scores
 - `save(path)` / `Galaxy.load(path, device="cpu")` — persist/restore all fitted state
-- `threshold_` — absolute anomaly threshold (99th percentile of training scores by default)
+- `threshold_` — absolute anomaly threshold (quantile `1 - effective_outlier_ratio_` of training scores)
+- `effective_outlier_ratio_` — the outlier ratio actually used in fit (from config or labels)
 - `fit_info_` — dict with `train_score_mean`, `train_score_std`, `threshold_`, `outlier_ratio`, `outlier_ratio_source` ("labels" or "config"), `n_excluded_per_iter`
 - `input_dim` — number of features from training data
 - `__repr__` — shows `Galaxy(not fitted)` or `Galaxy(input_dim=..., k=..., threshold_=...)`
 
-**`GalaxyConfig`** (`config.py`) — dataclass with `__post_init__` validation and `replace(**overrides)` method.
+**`GalaxyConfig`** (`config.py`) — dataclass with `__post_init__` validation and `replace(**overrides)` method. Validates device string, warns on gravity/score mismatch.
 
-**`GalaxyADBench`** (`adapter.py`) — ADBench-compatible wrapper exposing `fit`, `predict_score`, `predict`, `save`, `load`, `threshold_`, `fit_info_`.
+**`GalaxyADBench`** (`adapter.py`) — ADBench-compatible wrapper. Does NOT forward `y_train` to `Galaxy.fit()` to ensure purely unsupervised evaluation per ADBench protocol.
 
 ## Architecture
 
@@ -92,29 +96,37 @@ Four-stage pipeline orchestrated by `Galaxy`:
 
 4. **GOF Scoring** (`gof.py`): Anomaly score = `-log(force)`, computed in log-space. Scalar mode: `-logsumexp(log F_ik)`. Vector mode: `-[log(||force_vec||) + max_log_force]`.
 
+**Shared computation** (`gravity.py`): Single source of truth for gravitational force computation. Exports `mahalanobis_diag`, `compute_log_forces`, `aggregate_force_scalar`, `aggregate_force_vector`, and `VAR_FLOOR`. Used by `smm_torch.py`, `gof.py`, and `em.py`.
+
 **Supporting modules**:
-- `config.py`: `GalaxyConfig` dataclass — hyperparameters with validation
-- `adapter.py`: `GalaxyADBench` — ADBench-compatible wrapper
+- `config.py`: `GalaxyConfig` dataclass — hyperparameters with validation, device check, mismatch warning
+- `adapter.py`: `GalaxyADBench` — ADBench-compatible wrapper (labels NOT forwarded)
 - `smm_torch.py`: `SMMTorch` — GPU-native Student-t Mixture Model (ν=1); device-aware Generator; relative tolerance convergence
+- `datasets.py`: `find_datasets()` — shared dataset discovery for scripts
 
 ## Critical Implementation Details
 
 - **Log-space scoring**: GOF scores are `-log(force)`, not `1/force`. Avoids division-by-zero, keeps scores finite. Ranking identical for AUC.
-- **float64 det_covars**: `em.py` computes determinant in float64 to avoid underflow. `gof.py` uses `torch.log(covars).sum()` instead.
+- **gravity.py is the single source of truth**: All log-force computation (SMM E-step, GOF scoring, EM gravity loss) shares the same `compute_log_forces` function. The SMM E-step uses `mahalanobis_diag` directly (its `log_resp` lacks the `-log(π)` term that GOF/EM include).
+- **VAR_FLOOR constant**: Defined once in `gravity.py` (`1e-6`), imported everywhere. No duplicate definitions.
 - **Full-dataset re-scoring**: EM exclude step always re-scores the full X, not the filtered subset.
-- **Gravity version + score type**: Default is `vector`/`vector` (matched pair). Scalar gravity with vector scoring is a mismatch that wastes training effect.
-- **Absolute threshold**: `predict()` uses `threshold_` learned from training scores (quantile `1 - outlier_ratio`), not relative to the test batch.
-- **Label-informed outlier ratio**: When `y_train` is provided to `fit()`, the true anomaly rate (`y_train.mean()`) overrides `config.outlier_ratio` for EM exclusion and threshold computation. Stored in `fit_info_["outlier_ratio_source"]` as "labels" or "config".
+- **Gravity version + score type**: Default is `vector`/`vector` (matched pair). Scalar gravity with vector scoring triggers a `UserWarning` from `GalaxyConfig`.
+- **Absolute threshold**: `predict()` uses `threshold_` learned from training scores (quantile `1 - effective_outlier_ratio_`), not relative to the test batch.
+- **Label-informed outlier ratio**: When `y_train` is provided to `fit()`, the true anomaly rate (`y_train.mean()`) is stored as `effective_outlier_ratio_` for EM exclusion and threshold computation. The original `config.outlier_ratio` is NOT mutated. Stored in `fit_info_["outlier_ratio_source"]` as "labels" or "config".
+- **ADBench label isolation**: `GalaxyADBench.fit(X, y)` does NOT forward `y_train` to ensure purely unsupervised evaluation.
+- **Reproducibility**: `Galaxy.fit()` calls `torch.manual_seed(config.seed)` at the start, covering model initialization and DataLoader shuffle.
 - **Input requirements**: float32 preferred (float64 triggers warning); no NaN/Inf; minimum `k` samples.
+- **latent_dim**: `GalaxyConfig.latent_dim` defaults to `None` (equals `hidden_dim`), can be set independently for bottleneck control.
 
 ## GalaxyConfig Fields
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `seed` | int | 42 | Random seed |
+| `seed` | int | 42 | Random seed (used in `Galaxy.fit()` for reproducibility) |
 | `k` | int | 10 | Number of clusters |
-| `outlier_ratio` | float | 0.01 | Expected anomaly fraction, in [0, 1); overridden by `y_train.mean()` when labels provided |
-| `hidden_dim` | int | 128 | Autoencoder hidden/latent dimension |
+| `outlier_ratio` | float | 0.01 | Expected anomaly fraction, in [0, 1); may be overridden by labels at fit time |
+| `hidden_dim` | int | 128 | Autoencoder hidden dimension |
+| `latent_dim` | int\|None | None | Autoencoder latent dimension; None = equals hidden_dim |
 | `pretrain_epochs` | int | 200 | AE pretraining epochs |
 | `pretrain_lr` | float | 3e-3 | AE learning rate |
 | `pretrain_batch_size` | int | 1024 | AE batch size |
@@ -127,7 +139,7 @@ Four-stage pipeline orchestrated by `Galaxy`:
 | `pretrain` | bool | True | Skip AE pretraining if False |
 | `smm_n_iter` | int | 100 | SMM EM iterations |
 | `smm_tol` | float | 1e-3 | SMM convergence tolerance (relative) |
-| `device` | str | "cpu" | Torch device |
+| `device` | str | "cpu" | Torch device (validated on creation) |
 | `verbose` | bool | False | Print training progress |
 
 ## Data

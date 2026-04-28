@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import dataclasses
+import warnings
 from dataclasses import dataclass
+
+import torch
 
 
 @dataclass
@@ -12,6 +15,7 @@ class GalaxyConfig:
     k: int = 10
     outlier_ratio: float = 0.01
     hidden_dim: int = 128
+    latent_dim: int | None = None
     pretrain_epochs: int = 200
     pretrain_lr: float = 3e-3
     pretrain_batch_size: int = 1024
@@ -48,6 +52,8 @@ class GalaxyConfig:
             raise ValueError(f"k must be >= 1, got {self.k}")
         if self.hidden_dim < 1:
             raise ValueError(f"hidden_dim must be >= 1, got {self.hidden_dim}")
+        if self.latent_dim is not None and self.latent_dim < 1:
+            raise ValueError(f"latent_dim must be >= 1 or None, got {self.latent_dim}")
         if self.pretrain_batch_size < 1:
             raise ValueError(
                 f"pretrain_batch_size must be >= 1, got {self.pretrain_batch_size}"
@@ -70,6 +76,18 @@ class GalaxyConfig:
             raise ValueError(f"em_finetune_lr must be > 0, got {self.em_finetune_lr}")
         if self.smm_tol <= 0:
             raise ValueError(f"smm_tol must be > 0, got {self.smm_tol}")
+        # Validate device string
+        try:
+            torch.device(self.device)
+        except RuntimeError as e:
+            raise ValueError(f"Invalid device: {self.device!r}") from e
+        # Warn about gravity/scoring mismatch
+        if self.gravity_version == "scalar" and self.score_type == "vector":
+            warnings.warn(
+                "scalar gravity_version with vector score_type is a mismatch — "
+                "training effect will be wasted. Consider matching them.",
+                stacklevel=2,
+            )
 
     def replace(self, **overrides: object) -> GalaxyConfig:
         """Return a new GalaxyConfig with specified fields overridden."""

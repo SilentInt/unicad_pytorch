@@ -11,8 +11,9 @@ from unicad_torch.galaxy import Galaxy
 class GalaxyADBench:
     """ADBench-compatible wrapper for Galaxy.
 
-    Follows the ADBench convention: fit(X_train, y_train) where y_train
-    is ignored (unsupervised), and predict_score(X) returns anomaly scores.
+    In ADBench mode, y_train is NOT forwarded to Galaxy.fit() — this ensures
+    purely unsupervised evaluation as required by the ADBench benchmark
+    protocol. Use Galaxy directly for label-aware training.
     """
 
     def __init__(self, config: GalaxyConfig | None = None) -> None:
@@ -22,7 +23,7 @@ class GalaxyADBench:
     def fit(
         self, X_train: np.ndarray, y_train: np.ndarray | None = None
     ) -> GalaxyADBench:
-        self._galaxy.fit(X_train, y_train)
+        self._galaxy.fit(X_train, y_train=None)
         return self
 
     def predict_score(self, X: np.ndarray) -> np.ndarray:

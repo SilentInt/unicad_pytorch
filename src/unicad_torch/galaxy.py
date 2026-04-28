@@ -34,9 +34,10 @@ class Galaxy:
         self.scaler: StandardScaler | RowScaler | None = None
         self.model: Autoencoder | None = None
         self.em: GalaxyEM | None = None
-        self.scorer = GOFScorer(device=self.config.device)
+        self.scorer = GOFScorer()
         self.input_dim: int | None = None
         self.threshold_: float | None = None
+        self.effective_outlier_ratio_: float = self.config.outlier_ratio
         self.fit_info_: dict[str, object] = {}
 
     def __repr__(self) -> str:
@@ -56,13 +57,21 @@ class Galaxy:
                 f"Need at least k={self.config.k} samples, got {X_train.shape[0]}"
             )
 
+        # Set seed for reproducibility (covers model init, DataLoader shuffle)
+        torch.manual_seed(self.config.seed)
+
         # When labels are available, let the true anomaly rate override outlier_ratio
+        # The config object is NOT mutated — effective ratio stored separately
         outlier_ratio_source = "config"
+        self.effective_outlier_ratio_ = self.config.outlier_ratio
         if y_train is not None and y_train.size > 0:
             label_ratio = float(y_train.mean())
-            if label_ratio > 0 and label_ratio != self.config.outlier_ratio:
-                self.config = self.config.replace(outlier_ratio=label_ratio)
+            if label_ratio > 0:
+                self.effective_outlier_ratio_ = label_ratio
                 outlier_ratio_source = "labels"
+
+        # Build a working config with the effective outlier_ratio for EM
+        eff_config = self.config.replace(outlier_ratio=self.effective_outlier_ratio_)
 
         device = self.config.device
         if X_train.dtype != np.float32:
@@ -85,10 +94,11 @@ class Galaxy:
 
         # Stage 2: Autoencoder pretraining
         self.input_dim = X_train.shape[1]
+        latent_dim = self.config.latent_dim or self.config.hidden_dim
         self.model = Autoencoder(
             input_dim=self.input_dim,
             hidden_dim=self.config.hidden_dim,
-            latent_dim=self.config.hidden_dim,
+            latent_dim=latent_dim,
         ).to(device)
         if self.config.pretrain:
             if self.config.verbose:
@@ -97,16 +107,16 @@ class Galaxy:
                 )
             pretrain_autoencoder(self.model, X_tensor, self.config)
 
-        # Stage 3: Iterative EM
+        # Stage 3: Iterative EM (uses effective outlier_ratio)
         if self.config.verbose:
-            print(f"[Galaxy] Running EM ({self.config.em_iters} iterations)...")
-        self.em = GalaxyEM(self.model, self.config)
+            print(f"[Galaxy] Running EM ({eff_config.em_iters} iterations)...")
+        self.em = GalaxyEM(self.model, eff_config)
         self.em.fit(X_tensor)
 
         # Compute absolute threshold from training scores
         train_scores = self._score_tensor(X_tensor)
         self.threshold_ = torch.quantile(
-            train_scores, 1.0 - self.config.outlier_ratio
+            train_scores, 1.0 - self.effective_outlier_ratio_
         ).item()
 
         # Collect fit info
@@ -114,7 +124,7 @@ class Galaxy:
             "train_score_mean": float(train_scores.mean()),
             "train_score_std": float(train_scores.std()),
             "threshold_": self.threshold_,
-            "outlier_ratio": self.config.outlier_ratio,
+            "outlier_ratio": self.effective_outlier_ratio_,
             "outlier_ratio_source": outlier_ratio_source,
             "n_excluded_per_iter": getattr(self.em, "n_excluded_per_iter", []),
         }
@@ -124,7 +134,7 @@ class Galaxy:
         if self.config.verbose:
             print(
                 f"[Galaxy] Fit complete. threshold_={self.threshold_:.4f}  "
-                f"outlier_ratio={self.config.outlier_ratio:.4f} (from {outlier_ratio_source})  "
+                f"outlier_ratio={self.effective_outlier_ratio_:.4f} (from {outlier_ratio_source})  "
                 f"train_score_mean={float(train_scores.mean()):.4f}"
             )
 
@@ -179,6 +189,7 @@ class Galaxy:
             "config": dataclasses.asdict(self.config),
             "input_dim": self.input_dim,
             "threshold_": self.threshold_,
+            "effective_outlier_ratio_": self.effective_outlier_ratio_,
             "fit_info_": self.fit_info_,
             "model_state": self.model.state_dict(),
             "em_means": self.em.means.cpu(),
@@ -210,6 +221,9 @@ class Galaxy:
         galaxy = cls(config)
         galaxy.input_dim = state["input_dim"]  # type: ignore[assignment]
         galaxy.threshold_ = state["threshold_"]  # type: ignore[assignment]
+        galaxy.effective_outlier_ratio_ = state.get(
+            "effective_outlier_ratio_", config.outlier_ratio
+        )  # type: ignore[assignment]
         galaxy.fit_info_ = state.get("fit_info_", {})  # type: ignore[assignment]
 
         # Rebuild scaler
@@ -225,16 +239,18 @@ class Galaxy:
             galaxy.scaler = None
 
         # Rebuild autoencoder
+        latent_dim = config.latent_dim or config.hidden_dim
         galaxy.model = Autoencoder(
             input_dim=galaxy.input_dim,  # type: ignore[arg-type]
             hidden_dim=config.hidden_dim,
-            latent_dim=config.hidden_dim,
+            latent_dim=latent_dim,
         ).to(device)
         galaxy.model.load_state_dict(state["model_state"])  # type: ignore[arg-type]
         galaxy.model.eval()
 
-        # Rebuild EM state
-        galaxy.em = GalaxyEM(galaxy.model, config)
+        # Rebuild EM state (use effective outlier_ratio)
+        eff_config = config.replace(outlier_ratio=galaxy.effective_outlier_ratio_)
+        galaxy.em = GalaxyEM(galaxy.model, eff_config)
         galaxy.em.means = state["em_means"].to(device)  # type: ignore[assignment]
         galaxy.em.weights = state["em_weights"].to(device)  # type: ignore[assignment]
         galaxy.em.covars = state["em_covars"].to(device)  # type: ignore[assignment]

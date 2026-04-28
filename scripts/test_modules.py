@@ -10,7 +10,6 @@ Usage
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import time
 import warnings
@@ -20,9 +19,11 @@ import torch
 from sklearn.metrics import roc_auc_score
 
 from unicad_torch.config import GalaxyConfig
+from unicad_torch.datasets import find_datasets
 from unicad_torch.preprocessing import StandardScaler, RowScaler
 from unicad_torch.model import Autoencoder, pretrain_autoencoder
-from unicad_torch.smm_torch import SMMTorch, _mahalanobis_diag
+from unicad_torch.smm_torch import SMMTorch
+from unicad_torch.gravity import mahalanobis_diag
 from unicad_torch.gof import GOFScorer
 from unicad_torch.em import GalaxyEM
 from unicad_torch.galaxy import Galaxy
@@ -188,11 +189,11 @@ def test_gof(Z: torch.Tensor, smm: SMMTorch, config: GalaxyConfig) -> torch.Tens
     covars = smm.covars_.detach().clamp(min=1e-6)
     weights = smm.weights_.detach()
 
-    scorer = GOFScorer(device=config.device)
+    scorer = GOFScorer()
 
     # Mahalanobis distance
     _section("5a. Mahalanobis Distance")
-    maha = _mahalanobis_diag(Z, means, covars)
+    maha = mahalanobis_diag(Z, means, covars)
     print(_stats(maha, "maha"))
     for c in range(min(5, means.shape[0])):
         print(
@@ -258,7 +259,7 @@ def test_em(
     # Score with EM results
     with torch.no_grad():
         Z = model.encoder(X_tensor)
-    scorer = GOFScorer(device=config.device)
+    scorer = GOFScorer()
     score = scorer.get_score(
         Z, em.means, covars=em.covars, weights=em.weights, score_type=config.score_type
     )
@@ -329,21 +330,6 @@ def test_adapter(X: np.ndarray, y: np.ndarray, config: GalaxyConfig) -> None:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-def find_datasets(
-    data_dir: str, datasets: list[str] | None = None
-) -> list[tuple[str, str]]:
-    results: list[tuple[str, str]] = []
-    for root, _dirs, files in os.walk(data_dir):
-        for f in sorted(files):
-            if not f.endswith(".npz"):
-                continue
-            name = f[:-4]
-            path = os.path.join(root, f)
-            if datasets is None or name in datasets or f in datasets:
-                results.append((name, path))
-    return results
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Module-by-module test with real data")
     parser.add_argument("--data-dir", default="data/Classical")
