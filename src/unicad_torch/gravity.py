@@ -11,6 +11,7 @@ import torch
 import torch.nn.functional as F
 
 VAR_FLOOR = 1e-6
+_LOG_PI = torch.log(torch.tensor(torch.pi))
 
 
 def mahalanobis_diag(
@@ -57,7 +58,7 @@ def compute_log_forces(
 
     return (
         torch.log(weights.clamp(min=1e-30))  # (1, K)
-        - torch.log(torch.tensor(torch.pi, dtype=Z.dtype, device=Z.device))
+        - _LOG_PI.to(dtype=Z.dtype, device=Z.device)
         - 0.5 * log_det_covars.unsqueeze(0)  # (1, K)
         - torch.log1p(maha)  # (N, K)
     )  # (N, K)

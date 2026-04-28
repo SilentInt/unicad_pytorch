@@ -99,17 +99,20 @@ class GalaxyEM:
         )
 
     def fit(self, X: torch.Tensor) -> GalaxyEM:
-        Z = self.update_prototypes(X)
+        # Initial encode of full X
+        with torch.no_grad():
+            Z = self.model.encoder(X)
+        self.update_prototypes(X, Z)
 
         n_excluded_per_iter: list[int] = []
         for _iter in range(self.config.em_iters):
-            X_filtered, n_excluded = self._exclude_outlier_set(X, Z)
+            X_filtered, Z_filtered, n_excluded = self._exclude_outlier_set(X, Z)
             n_excluded_per_iter.append(n_excluded)
             self.update_network(X_filtered)
-            self.update_prototypes(X_filtered)
+            self.update_prototypes(X_filtered, Z_filtered)
 
             # Re-encode full X for next iteration's outlier exclusion
-            # (encoder has changed during update_network + update_prototypes)
+            # (encoder has changed during update_network)
             with torch.no_grad():
                 Z = self.model.encoder(X)
 
@@ -137,14 +140,14 @@ class GalaxyEM:
 
     def _exclude_outlier_set(
         self, X: torch.Tensor, Z: torch.Tensor | None = None
-    ) -> tuple[torch.Tensor, int]:
+    ) -> tuple[torch.Tensor, torch.Tensor, int]:
         """Re-score the FULL X, then filter top outlier_ratio% out.
 
         Args:
             X: (N, D) raw input tensor.
             Z: (N, D_latent) pre-computed embeddings, if available.
 
-        Returns (filtered_X, n_excluded).
+        Returns (filtered_X, filtered_Z, n_excluded).
         """
         if Z is None:
             with torch.no_grad():
@@ -168,21 +171,29 @@ class GalaxyEM:
 
         if torch.isnan(score).any() or torch.isinf(score).any():
             warnings.warn("GOF score contains NaN/Inf — skipping outlier exclusion")
-            return X, 0
+            return X, Z, 0
 
         threshold = torch.quantile(score, 1.0 - self.outlier_ratio)
         mask = score <= threshold
         X_filtered = X[mask]
+        Z_filtered = Z[mask]
         n_excluded = int((~mask).sum())
 
         if X_filtered.shape[0] == 0:
-            return X, n_excluded
-        return X_filtered, n_excluded
+            return X, Z, n_excluded
+        return X_filtered, Z_filtered, n_excluded
 
-    def update_prototypes(self, X: torch.Tensor) -> torch.Tensor:
-        """Fit SMM on encoded X. Returns Z (encoded embeddings)."""
-        with torch.no_grad():
-            Z = self.model.encoder(X)
+    def update_prototypes(
+        self, X: torch.Tensor, Z: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        """Fit SMM on encoded X. Returns Z (encoded embeddings).
+
+        If Z is provided (pre-computed embeddings for X), skips encoding.
+        """
+        if Z is None:
+            with torch.no_grad():
+                Z = self.model.encoder(X)
+        assert Z is not None
 
         if torch.isnan(Z).any() or torch.isinf(Z).any():
             raise RuntimeError(

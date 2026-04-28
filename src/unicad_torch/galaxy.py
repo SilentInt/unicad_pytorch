@@ -40,6 +40,7 @@ class Galaxy:
         self._train_score_mean: float = float("nan")
         self._train_score_std: float = float("nan")
         self._outlier_ratio_source: str = "config"
+        self._train_scores_: torch.Tensor | None = None
 
     def __repr__(self) -> str:
         if self.model is None:
@@ -128,14 +129,14 @@ class Galaxy:
         self.em.fit(X_tensor)
 
         # Compute absolute threshold from training scores
-        train_scores = self.em.score(X_tensor)
+        self._train_scores_ = self.em.score(X_tensor)
         self.threshold_ = torch.quantile(
-            train_scores, 1.0 - self.effective_outlier_ratio_
+            self._train_scores_, 1.0 - self.effective_outlier_ratio_
         ).item()
 
         # Store fit metadata
-        self._train_score_mean = float(train_scores.mean())
-        self._train_score_std = float(train_scores.std())
+        self._train_score_mean = float(self._train_scores_.mean())
+        self._train_score_std = float(self._train_scores_.std())
 
         self.model.eval()
 
@@ -171,6 +172,9 @@ class Galaxy:
     ) -> np.ndarray:
         """Fit the model and return anomaly scores for the training data."""
         self.fit(X_train, y_train)
+        # Reuse scores computed at the end of fit() to avoid redundant encode + gof_score
+        if self._train_scores_ is not None:
+            return self._train_scores_.cpu().detach().numpy()
         return self.predict_score(X_train)
 
     def save(self, path: str | Path) -> None:
