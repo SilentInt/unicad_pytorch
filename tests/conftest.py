@@ -11,7 +11,9 @@ from unicad_torch.config import GalaxyConfig
 
 @pytest.fixture
 def default_config() -> GalaxyConfig:
-    return GalaxyConfig(pretrain_epochs=2, em_iters=1, em_finetune_steps=2, verbose=False)
+    return GalaxyConfig(
+        pretrain_epochs=2, em_iters=1, em_finetune_steps=2, verbose=False
+    )
 
 
 @pytest.fixture

@@ -24,7 +24,7 @@ from unicad_torch.preprocessing import StandardScaler, RowScaler
 from unicad_torch.model import Autoencoder, pretrain_autoencoder
 from unicad_torch.smm_torch import SMMTorch
 from unicad_torch.gravity import mahalanobis_diag
-from unicad_torch.gof import GOFScorer
+from unicad_torch.gof import gof_score
 from unicad_torch.em import GalaxyEM
 from unicad_torch.galaxy import Galaxy
 from unicad_torch.adapter import GalaxyADBench
@@ -189,8 +189,6 @@ def test_gof(Z: torch.Tensor, smm: SMMTorch, config: GalaxyConfig) -> torch.Tens
     covars = smm.covars_.detach().clamp(min=1e-6)
     weights = smm.weights_.detach()
 
-    scorer = GOFScorer()
-
     # Mahalanobis distance
     _section("5a. Mahalanobis Distance")
     maha = mahalanobis_diag(Z, means, covars)
@@ -203,16 +201,12 @@ def test_gof(Z: torch.Tensor, smm: SMMTorch, config: GalaxyConfig) -> torch.Tens
 
     # Scalar score
     _section("5b. Scalar Score")
-    score_scalar = scorer.get_score(
-        Z, means, covars=covars, weights=weights, score_type="scalar"
-    )
+    score_scalar = gof_score(Z, means, covars, weights, score_type="scalar")
     print(_stats(score_scalar, "score_scalar"))
 
     # Vector score
     _section("5c. Vector Score")
-    score_vector = scorer.get_score(
-        Z, means, covars=covars, weights=weights, score_type="vector"
-    )
+    score_vector = gof_score(Z, means, covars, weights, score_type="vector")
     print(_stats(score_vector, "score_vector"))
 
     return score_vector
@@ -257,12 +251,7 @@ def test_em(
     print(_stats(em.weights, "em.weights"))
 
     # Score with EM results
-    with torch.no_grad():
-        Z = model.encoder(X_tensor)
-    scorer = GOFScorer()
-    score = scorer.get_score(
-        Z, em.means, covars=em.covars, weights=em.weights, score_type=config.score_type
-    )
+    score = em.score(X_tensor)
     print(_stats(score, "em_score"))
 
     return em

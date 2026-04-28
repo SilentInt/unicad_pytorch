@@ -67,7 +67,7 @@ uv run python scripts/predict.py --model galaxy.pt --data test.csv --output-scor
 
 **`Galaxy`** (`galaxy.py`) — main model class:
 - `fit(X_train, y_train=None)` — train the four-stage pipeline; when `y_train` is provided, the true anomaly rate is used for EM exclusion and threshold computation (stored as `effective_outlier_ratio_`, config is NOT mutated)
-- `predict_score(X)` — return continuous anomaly scores (`np.float32`)
+- `predict_score(X)` — return continuous anomaly scores (`np.float32`); delegates scoring to `GalaxyEM.score()`
 - `predict(X)` — return binary 0/1 labels using `threshold_` from training (`np.int32`)
 - `fit_predict(X_train, y_train=None)` — fit then return training scores
 - `save(path)` / `Galaxy.load(path, device="cpu")` — persist/restore all fitted state
@@ -90,11 +90,11 @@ Four-stage pipeline orchestrated by `Galaxy`:
 2. **Autoencoder Pretraining** (`model.py`): `Encoder` -> `Decoder` with MSE(sum) loss, Adam + StepLR. `pretrain_autoencoder()` trains for 200 epochs. Supports `verbose` loss logging.
 
 3. **Iterative EM** (`em.py`): `GalaxyEM.fit()` runs `em_iters` rounds, each:
-   - **Exclude outliers**: GOF-score all data, remove top `outlier_ratio`%
+   - **Exclude outliers**: score via `GalaxyEM.score()`, remove top `outlier_ratio`%
    - **Update network**: fine-tune autoencoder with reconstruction + gravity loss
    - **Update prototypes**: encode data -> fit SMM -> update means/weights/covars
 
-4. **GOF Scoring** (`gof.py`): Anomaly score = `-log(force)`, computed in log-space. Scalar mode: `-logsumexp(log F_ik)`. Vector mode: `-[log(||force_vec||) + max_log_force]`.
+4. **GOF Scoring** (`gof.py`): `gof_score()` function computes anomaly score = `-log(force)` in log-space. Scalar mode: `-logsumexp(log F_ik)`. Vector mode: `-[log(||force_vec||) + max_log_force]`.
 
 **Shared computation** (`gravity.py`): Single source of truth for gravitational force computation. Exports `mahalanobis_diag`, `compute_log_forces`, `aggregate_force_scalar`, `aggregate_force_vector`, and `VAR_FLOOR`. Used by `smm_torch.py`, `gof.py`, and `em.py`.
 
@@ -106,8 +106,12 @@ Four-stage pipeline orchestrated by `Galaxy`:
 
 ## Critical Implementation Details
 
+- **GalaxyEM owns scoring**: `GalaxyEM.score(X_tensor)` encapsulates the encode-then-score pattern. Galaxy delegates to `em.score()` and does not reach into EM internals. `score_type` is read from `self.config.score_type` inside EM, not passed by callers.
+- **gof_score is a function**: `gof.py` exports `gof_score(feat, means, covars, weights, score_type)` — a stateless module-level function, not a class. `covars` and `weights` are required (no None fallback).
+- **SMM is ephemeral**: `GalaxyEM` stores SMM constructor params in `_smm_params` and creates a fresh `SMMTorch` inside each `update_prototypes()` call. No `self.smm` attribute. Avoids stale state after load.
+- **GalaxyEM.load_state()**: `Galaxy.load()` calls `em.load_state(means, weights, covars, n_excluded_per_iter)` instead of directly setting attributes. Restores complete EM state consistently.
 - **Log-space scoring**: GOF scores are `-log(force)`, not `1/force`. Avoids division-by-zero, keeps scores finite. Ranking identical for AUC.
-- **gravity.py is the single source of truth**: All log-force computation (SMM E-step, GOF scoring, EM gravity loss) shares the same `compute_log_forces` function. The SMM E-step uses `mahalanobis_diag` directly (its `log_resp` lacks the `-log(π)` term that GOF/EM include).
+- **gravity.py is the single source of truth**: All log-force computation shares `compute_log_forces`. The SMM E-step uses `mahalanobis_diag` directly (its `log_resp` lacks the `-log(π)` term that GOF/EM include).
 - **VAR_FLOOR constant**: Defined once in `gravity.py` (`1e-6`), imported everywhere. No duplicate definitions.
 - **Full-dataset re-scoring**: EM exclude step always re-scores the full X, not the filtered subset.
 - **Gravity version + score type**: Default is `vector`/`vector` (matched pair). Scalar gravity with vector scoring triggers a `UserWarning` from `GalaxyConfig`.

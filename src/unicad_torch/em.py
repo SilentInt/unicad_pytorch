@@ -17,7 +17,7 @@ import torch
 import torch.nn.functional as F
 
 from unicad_torch.config import GalaxyConfig
-from unicad_torch.gof import GOFScorer
+from unicad_torch.gof import gof_score
 from unicad_torch.gravity import (
     VAR_FLOOR,
     aggregate_force_scalar,
@@ -34,19 +34,42 @@ class GalaxyEM:
     def __init__(self, model: Autoencoder, config: GalaxyConfig) -> None:
         self.model = model
         self.config = config
-        self.device = config.device
 
-        self.smm = SMMTorch(
-            n_components=config.k,
-            n_iter=config.smm_n_iter,
-            tol=config.smm_tol,
-            random_state=config.seed,
-        )
+        self._smm_params: dict[str, int | float] = {
+            "n_components": config.k,
+            "n_iter": config.smm_n_iter,
+            "tol": config.smm_tol,
+            "random_state": config.seed,
+        }
 
-        self.scorer = GOFScorer()
         self.means: torch.Tensor | None = None
         self.weights: torch.Tensor | None = None
         self.covars: torch.Tensor | None = None
+        self.n_excluded_per_iter: list[int] = []
+
+    def load_state(
+        self,
+        means: torch.Tensor,
+        weights: torch.Tensor,
+        covars: torch.Tensor,
+        n_excluded_per_iter: list[int] | None = None,
+    ) -> None:
+        """Restore fitted prototype state (used by Galaxy.load)."""
+        self.means = means
+        self.weights = weights
+        self.covars = covars
+        self.n_excluded_per_iter = n_excluded_per_iter or []
+
+    def score(self, X_tensor: torch.Tensor) -> torch.Tensor:
+        """Score data using current prototypes and model encoder."""
+        if self.means is None or self.covars is None or self.weights is None:
+            raise RuntimeError("Prototypes not initialized — call fit() first")
+        self.model.eval()
+        with torch.no_grad():
+            Z = self.model.encoder(X_tensor)
+        return gof_score(
+            Z, self.means, self.covars, self.weights, self.config.score_type
+        )
 
     def fit(self, X: torch.Tensor) -> GalaxyEM:
         self.update_prototypes(X)
@@ -61,13 +84,17 @@ class GalaxyEM:
             if self.config.verbose:
                 with torch.no_grad():
                     Z = self.model.encoder(X)
-                if self.means is not None and self.covars is not None:
-                    score = self.scorer.get_score(
+                if (
+                    self.means is not None
+                    and self.covars is not None
+                    and self.weights is not None
+                ):
+                    score = gof_score(
                         Z,
                         self.means,
-                        covars=self.covars,
-                        weights=self.weights,
-                        score_type=self.config.score_type,
+                        self.covars,
+                        self.weights,
+                        self.config.score_type,
                     )
                     print(
                         f"  [EM iter {_iter + 1}/{self.config.em_iters}]  "
@@ -93,12 +120,12 @@ class GalaxyEM:
             raise RuntimeError(
                 "Prototypes not initialized — call update_prototypes first"
             )
-        score = self.scorer.get_score(
-            Z,
-            self.means,
-            covars=self.covars,
-            weights=self.weights,
-            score_type=self.config.score_type,
+        if self.weights is None:
+            raise RuntimeError(
+                "Prototypes not initialized — call update_prototypes first"
+            )
+        score = gof_score(
+            Z, self.means, self.covars, self.weights, self.config.score_type
         )
 
         if torch.isnan(score).any() or torch.isinf(score).any():
@@ -123,18 +150,19 @@ class GalaxyEM:
                 "Encoder output contains NaN/Inf — cannot update prototypes"
             )
 
-        self.smm.fit(Z)
+        smm = SMMTorch(**self._smm_params)  # type: ignore[arg-type]
+        smm.fit(Z)
 
-        if self.smm.means_ is None:
+        if smm.means_ is None:
             raise RuntimeError("SMM fit failed — means_ is None")
-        if self.smm.weights_ is None:
+        if smm.weights_ is None:
             raise RuntimeError("SMM fit failed — weights_ is None")
-        if self.smm.covars_ is None:
+        if smm.covars_ is None:
             raise RuntimeError("SMM fit failed — covars_ is None")
 
-        self.means = self.smm.means_.detach().to(torch.float32)
-        self.weights = self.smm.weights_.detach().to(torch.float32)
-        self.covars = self.smm.covars_.detach().clamp(min=VAR_FLOOR).to(torch.float32)
+        self.means = smm.means_.detach().to(torch.float32)
+        self.weights = smm.weights_.detach().to(torch.float32)
+        self.covars = smm.covars_.detach().clamp(min=VAR_FLOOR).to(torch.float32)
 
     def update_network(self, X: torch.Tensor) -> None:
         """Fine-tune autoencoder with reconstruction + gravity loss (log-space)."""

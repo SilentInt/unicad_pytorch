@@ -21,7 +21,6 @@ import torch
 
 from unicad_torch.config import GalaxyConfig
 from unicad_torch.em import GalaxyEM
-from unicad_torch.gof import GOFScorer
 from unicad_torch.model import Autoencoder, pretrain_autoencoder
 from unicad_torch.preprocessing import RowScaler, StandardScaler
 
@@ -34,7 +33,6 @@ class Galaxy:
         self.scaler: StandardScaler | RowScaler | None = None
         self.model: Autoencoder | None = None
         self.em: GalaxyEM | None = None
-        self.scorer = GOFScorer()
         self.input_dim: int | None = None
         self.threshold_: float | None = None
         self.effective_outlier_ratio_: float = self.config.outlier_ratio
@@ -114,7 +112,7 @@ class Galaxy:
         self.em.fit(X_tensor)
 
         # Compute absolute threshold from training scores
-        train_scores = self._score_tensor(X_tensor)
+        train_scores = self.em.score(X_tensor)
         self.threshold_ = torch.quantile(
             train_scores, 1.0 - self.effective_outlier_ratio_
         ).item()
@@ -144,24 +142,10 @@ class Galaxy:
         """Return continuous anomaly scores (higher = more anomalous)."""
         X_tensor = self._prepare_input(X)
 
-        if self.model is None:
-            raise RuntimeError("Model not initialized — call fit() first")
         if self.em is None:
-            raise RuntimeError("EM not initialized — call fit() first")
-        if self.em.means is None:
-            raise RuntimeError("Prototypes not initialized — call fit() first")
+            raise RuntimeError("Model not fitted — call fit() first")
 
-        self.model.eval()
-        with torch.no_grad():
-            Z = self.model.encoder(X_tensor)
-
-        score = self.scorer.get_score(
-            Z,
-            self.em.means,
-            covars=self.em.covars,
-            weights=self.em.weights,
-            score_type=self.config.score_type,
-        )
+        score = self.em.score(X_tensor)
         return score.cpu().detach().numpy()
 
     def predict(self, X: np.ndarray) -> np.ndarray:
@@ -189,7 +173,6 @@ class Galaxy:
             "config": dataclasses.asdict(self.config),
             "input_dim": self.input_dim,
             "threshold_": self.threshold_,
-            "effective_outlier_ratio_": self.effective_outlier_ratio_,
             "fit_info_": self.fit_info_,
             "model_state": self.model.state_dict(),
             "em_means": self.em.means.cpu(),
@@ -221,10 +204,13 @@ class Galaxy:
         galaxy = cls(config)
         galaxy.input_dim = state["input_dim"]  # type: ignore[assignment]
         galaxy.threshold_ = state["threshold_"]  # type: ignore[assignment]
-        galaxy.effective_outlier_ratio_ = state.get(
-            "effective_outlier_ratio_", config.outlier_ratio
-        )  # type: ignore[assignment]
         galaxy.fit_info_ = state.get("fit_info_", {})  # type: ignore[assignment]
+
+        # Restore effective outlier ratio
+        fit_info = galaxy.fit_info_
+        galaxy.effective_outlier_ratio_ = float(
+            fit_info.get("outlier_ratio", config.outlier_ratio)  # type: ignore[arg-type]
+        )
 
         # Rebuild scaler
         scaler_type = state.get("scaler_type")
@@ -248,12 +234,15 @@ class Galaxy:
         galaxy.model.load_state_dict(state["model_state"])  # type: ignore[arg-type]
         galaxy.model.eval()
 
-        # Rebuild EM state (use effective outlier_ratio)
+        # Rebuild EM state
         eff_config = config.replace(outlier_ratio=galaxy.effective_outlier_ratio_)
         galaxy.em = GalaxyEM(galaxy.model, eff_config)
-        galaxy.em.means = state["em_means"].to(device)  # type: ignore[assignment]
-        galaxy.em.weights = state["em_weights"].to(device)  # type: ignore[assignment]
-        galaxy.em.covars = state["em_covars"].to(device)  # type: ignore[assignment]
+        galaxy.em.load_state(
+            means=state["em_means"].to(device),
+            weights=state["em_weights"].to(device),
+            covars=state["em_covars"].to(device),
+            n_excluded_per_iter=fit_info.get("n_excluded_per_iter"),  # type: ignore[arg-type],
+        )
 
         return galaxy
 
@@ -274,22 +263,3 @@ class Galaxy:
             X_tensor = self.scaler.transform(X_tensor)
 
         return X_tensor
-
-    def _score_tensor(self, X_tensor: torch.Tensor) -> torch.Tensor:
-        """Score a preprocessed device tensor (used internally by fit)."""
-        if self.model is None:
-            raise RuntimeError("Model not initialized")
-        if self.em is None or self.em.means is None:
-            raise RuntimeError("Prototypes not initialized")
-
-        self.model.eval()
-        with torch.no_grad():
-            Z = self.model.encoder(X_tensor)
-
-        return self.scorer.get_score(
-            Z,
-            self.em.means,
-            covars=self.em.covars,
-            weights=self.em.weights,
-            score_type=self.config.score_type,
-        )

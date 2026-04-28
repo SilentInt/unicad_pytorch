@@ -46,7 +46,7 @@ def compute_log_forces(
         Z: (N, D) latent embeddings.
         means: (K, D) cluster means.
         covars: (K, D) diagonal variances (will be clamped to VAR_FLOOR).
-        weights: (K,) or (1, K) mixture weights.
+        weights: (1, K) mixture weights (caller must ensure shape).
 
     Returns:
         (N, K) log-forces tensor.
@@ -54,7 +54,6 @@ def compute_log_forces(
     covars = covars.clamp(min=VAR_FLOOR)
     maha = mahalanobis_diag(Z, means, covars)  # (N, K)
 
-    weights = weights.reshape(1, -1)  # ensure (1, K)
     log_det_covars = torch.log(covars).sum(dim=1)  # (K,)
 
     return (

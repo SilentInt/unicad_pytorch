@@ -45,6 +45,9 @@ typeCheckingMode = "basic"
 # they are valid public APIs at runtime. This is a known pyright+torch issue.
 reportPrivateImportUsage = false
 
+[tool.pytest.ini_options]
+norecursedirs = ["scripts"]
+
 [tool.ruff]
 target-version = "py310"
 line-length = 88
