@@ -51,7 +51,6 @@ def compute_log_forces(
     Returns:
         (N, K) log-forces tensor.
     """
-    covars = covars.clamp(min=VAR_FLOOR)
     maha = mahalanobis_diag(Z, means, covars)  # (N, K)
 
     log_det_covars = torch.log(covars).sum(dim=1)  # (K,)

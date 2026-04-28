@@ -36,7 +36,10 @@ class Galaxy:
         self.input_dim: int | None = None
         self.threshold_: float | None = None
         self.effective_outlier_ratio_: float = self.config.outlier_ratio
-        self.fit_info_: dict[str, object] = {}
+        # Fit metadata (populated during fit, used by fit_info_ property)
+        self._train_score_mean: float = float("nan")
+        self._train_score_std: float = float("nan")
+        self._outlier_ratio_source: str = "config"
 
     def __repr__(self) -> str:
         if self.model is None:
@@ -45,6 +48,21 @@ class Galaxy:
             f"Galaxy(input_dim={self.input_dim}, k={self.config.k}, "
             f"threshold_={self.threshold_:.4f})"
         )
+
+    @property
+    def fit_info_(self) -> dict[str, object]:
+        """Read-only view of fit metadata assembled from authoritative sources."""
+        info: dict[str, object] = {
+            "train_score_mean": self._train_score_mean,
+            "train_score_std": self._train_score_std,
+            "threshold_": self.threshold_,
+            "outlier_ratio": self.effective_outlier_ratio_,
+            "outlier_ratio_source": self._outlier_ratio_source,
+            "n_excluded_per_iter": (
+                self.em.n_excluded_per_iter if self.em is not None else []
+            ),
+        }
+        return info
 
     def fit(self, X_train: np.ndarray, y_train: np.ndarray | None = None) -> Galaxy:
         # Input validation
@@ -59,17 +77,13 @@ class Galaxy:
         torch.manual_seed(self.config.seed)
 
         # When labels are available, let the true anomaly rate override outlier_ratio
-        # The config object is NOT mutated — effective ratio stored separately
-        outlier_ratio_source = "config"
+        self._outlier_ratio_source = "config"
         self.effective_outlier_ratio_ = self.config.outlier_ratio
         if y_train is not None and y_train.size > 0:
             label_ratio = float(y_train.mean())
             if label_ratio > 0:
                 self.effective_outlier_ratio_ = label_ratio
-                outlier_ratio_source = "labels"
-
-        # Build a working config with the effective outlier_ratio for EM
-        eff_config = self.config.replace(outlier_ratio=self.effective_outlier_ratio_)
+                self._outlier_ratio_source = "labels"
 
         device = self.config.device
         if X_train.dtype != np.float32:
@@ -105,10 +119,12 @@ class Galaxy:
                 )
             pretrain_autoencoder(self.model, X_tensor, self.config)
 
-        # Stage 3: Iterative EM (uses effective outlier_ratio)
+        # Stage 3: Iterative EM
         if self.config.verbose:
-            print(f"[Galaxy] Running EM ({eff_config.em_iters} iterations)...")
-        self.em = GalaxyEM(self.model, eff_config)
+            print(f"[Galaxy] Running EM ({self.config.em_iters} iterations)...")
+        self.em = GalaxyEM(
+            self.model, self.config, outlier_ratio=self.effective_outlier_ratio_
+        )
         self.em.fit(X_tensor)
 
         # Compute absolute threshold from training scores
@@ -117,23 +133,18 @@ class Galaxy:
             train_scores, 1.0 - self.effective_outlier_ratio_
         ).item()
 
-        # Collect fit info
-        self.fit_info_ = {
-            "train_score_mean": float(train_scores.mean()),
-            "train_score_std": float(train_scores.std()),
-            "threshold_": self.threshold_,
-            "outlier_ratio": self.effective_outlier_ratio_,
-            "outlier_ratio_source": outlier_ratio_source,
-            "n_excluded_per_iter": getattr(self.em, "n_excluded_per_iter", []),
-        }
+        # Store fit metadata
+        self._train_score_mean = float(train_scores.mean())
+        self._train_score_std = float(train_scores.std())
 
         self.model.eval()
 
         if self.config.verbose:
             print(
                 f"[Galaxy] Fit complete. threshold_={self.threshold_:.4f}  "
-                f"outlier_ratio={self.effective_outlier_ratio_:.4f} (from {outlier_ratio_source})  "
-                f"train_score_mean={float(train_scores.mean()):.4f}"
+                f"outlier_ratio={self.effective_outlier_ratio_:.4f} "
+                f"(from {self._outlier_ratio_source})  "
+                f"train_score_mean={self._train_score_mean:.4f}"
             )
 
         return self
@@ -173,7 +184,11 @@ class Galaxy:
             "config": dataclasses.asdict(self.config),
             "input_dim": self.input_dim,
             "threshold_": self.threshold_,
-            "fit_info_": self.fit_info_,
+            "effective_outlier_ratio_": self.effective_outlier_ratio_,
+            "train_score_mean": self._train_score_mean,
+            "train_score_std": self._train_score_std,
+            "outlier_ratio_source": self._outlier_ratio_source,
+            "em_n_excluded_per_iter": self.em.n_excluded_per_iter,
             "model_state": self.model.state_dict(),
             "em_means": self.em.means.cpu(),
             "em_weights": self.em.weights.cpu(),
@@ -204,13 +219,35 @@ class Galaxy:
         galaxy = cls(config)
         galaxy.input_dim = state["input_dim"]  # type: ignore[assignment]
         galaxy.threshold_ = state["threshold_"]  # type: ignore[assignment]
-        galaxy.fit_info_ = state.get("fit_info_", {})  # type: ignore[assignment]
 
-        # Restore effective outlier ratio
-        fit_info = galaxy.fit_info_
-        galaxy.effective_outlier_ratio_ = float(
-            fit_info.get("outlier_ratio", config.outlier_ratio)  # type: ignore[arg-type]
-        )
+        # Restore fit metadata — new flat format
+        if "train_score_mean" in state:
+            galaxy.effective_outlier_ratio_ = float(state["effective_outlier_ratio_"])
+            galaxy._train_score_mean = float(state["train_score_mean"])
+            galaxy._train_score_std = float(state["train_score_std"])
+            galaxy._outlier_ratio_source = str(
+                state.get("outlier_ratio_source", "config")
+            )
+            n_excl = state.get("em_n_excluded_per_iter")
+        # Legacy format (nested fit_info_)
+        elif "fit_info_" in state:
+            fi = state["fit_info_"]
+            galaxy.effective_outlier_ratio_ = float(
+                fi.get("outlier_ratio", config.outlier_ratio)  # type: ignore[arg-type]
+            )
+            galaxy._train_score_mean = float(
+                fi.get("train_score_mean", float("nan"))  # type: ignore[arg-type]
+            )
+            galaxy._train_score_std = float(
+                fi.get("train_score_std", float("nan"))  # type: ignore[arg-type]
+            )
+            galaxy._outlier_ratio_source = str(
+                fi.get("outlier_ratio_source", "config")  # type: ignore[arg-type]
+            )
+            n_excl = fi.get("n_excluded_per_iter")  # type: ignore[assignment]
+        else:
+            galaxy.effective_outlier_ratio_ = config.outlier_ratio
+            n_excl = None
 
         # Rebuild scaler
         scaler_type = state.get("scaler_type")
@@ -235,13 +272,14 @@ class Galaxy:
         galaxy.model.eval()
 
         # Rebuild EM state
-        eff_config = config.replace(outlier_ratio=galaxy.effective_outlier_ratio_)
-        galaxy.em = GalaxyEM(galaxy.model, eff_config)
+        galaxy.em = GalaxyEM(
+            galaxy.model, config, outlier_ratio=galaxy.effective_outlier_ratio_
+        )
         galaxy.em.load_state(
             means=state["em_means"].to(device),
             weights=state["em_weights"].to(device),
             covars=state["em_covars"].to(device),
-            n_excluded_per_iter=fit_info.get("n_excluded_per_iter"),  # type: ignore[arg-type],
+            n_excluded_per_iter=n_excl,  # type: ignore[arg-type]
         )
 
         return galaxy

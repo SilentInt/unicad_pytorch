@@ -12,6 +12,7 @@ underflow/overflow from high-dimensional determinant products.
 from __future__ import annotations
 
 import warnings
+from typing import Callable
 
 import torch
 import torch.nn.functional as F
@@ -19,7 +20,6 @@ import torch.nn.functional as F
 from unicad_torch.config import GalaxyConfig
 from unicad_torch.gof import gof_score
 from unicad_torch.gravity import (
-    VAR_FLOOR,
     aggregate_force_scalar,
     aggregate_force_vector,
     compute_log_forces,
@@ -31,16 +31,43 @@ from unicad_torch.smm_torch import SMMTorch
 class GalaxyEM:
     """GPU-native iterative EM core."""
 
-    def __init__(self, model: Autoencoder, config: GalaxyConfig) -> None:
+    def __init__(
+        self,
+        model: Autoencoder,
+        config: GalaxyConfig,
+        outlier_ratio: float | None = None,
+    ) -> None:
         self.model = model
         self.config = config
+        self.outlier_ratio = (
+            outlier_ratio if outlier_ratio is not None else config.outlier_ratio
+        )
 
-        self._smm_params: dict[str, int | float] = {
-            "n_components": config.k,
-            "n_iter": config.smm_n_iter,
-            "tol": config.smm_tol,
-            "random_state": config.seed,
-        }
+        # Resolve gravity aggregation at construction time
+        if config.gravity_version == "scalar":
+
+            def _gravity_scalar(
+                lf: torch.Tensor,
+                means: torch.Tensor,
+                embed: torch.Tensor,
+            ) -> torch.Tensor:
+                return -aggregate_force_scalar(lf).sum()
+
+            self._compute_gravity_loss: Callable[
+                [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
+            ] = _gravity_scalar
+        elif config.gravity_version == "vector":
+
+            def _gravity_vector(
+                lf: torch.Tensor,
+                means: torch.Tensor,
+                embed: torch.Tensor,
+            ) -> torch.Tensor:
+                return -aggregate_force_vector(lf, means, embed).sum()
+
+            self._compute_gravity_loss = _gravity_vector
+        else:
+            raise ValueError(f"Unknown gravity_version: {config.gravity_version}")
 
         self.means: torch.Tensor | None = None
         self.weights: torch.Tensor | None = None
@@ -72,18 +99,21 @@ class GalaxyEM:
         )
 
     def fit(self, X: torch.Tensor) -> GalaxyEM:
-        self.update_prototypes(X)
+        Z = self.update_prototypes(X)
 
         n_excluded_per_iter: list[int] = []
         for _iter in range(self.config.em_iters):
-            X_filtered, n_excluded = self._exclude_outlier_set(X)
+            X_filtered, n_excluded = self._exclude_outlier_set(X, Z)
             n_excluded_per_iter.append(n_excluded)
             self.update_network(X_filtered)
             self.update_prototypes(X_filtered)
 
+            # Re-encode full X for next iteration's outlier exclusion
+            # (encoder has changed during update_network + update_prototypes)
+            with torch.no_grad():
+                Z = self.model.encoder(X)
+
             if self.config.verbose:
-                with torch.no_grad():
-                    Z = self.model.encoder(X)
                 if (
                     self.means is not None
                     and self.covars is not None
@@ -105,13 +135,21 @@ class GalaxyEM:
         self.n_excluded_per_iter = n_excluded_per_iter
         return self
 
-    def _exclude_outlier_set(self, X: torch.Tensor) -> tuple[torch.Tensor, int]:
+    def _exclude_outlier_set(
+        self, X: torch.Tensor, Z: torch.Tensor | None = None
+    ) -> tuple[torch.Tensor, int]:
         """Re-score the FULL X, then filter top outlier_ratio% out.
+
+        Args:
+            X: (N, D) raw input tensor.
+            Z: (N, D_latent) pre-computed embeddings, if available.
 
         Returns (filtered_X, n_excluded).
         """
-        with torch.no_grad():
-            Z = self.model.encoder(X)
+        if Z is None:
+            with torch.no_grad():
+                Z = self.model.encoder(X)
+        assert Z is not None
         if self.means is None:
             raise RuntimeError(
                 "Prototypes not initialized — call update_prototypes first"
@@ -132,7 +170,7 @@ class GalaxyEM:
             warnings.warn("GOF score contains NaN/Inf — skipping outlier exclusion")
             return X, 0
 
-        threshold = torch.quantile(score, 1.0 - self.config.outlier_ratio)
+        threshold = torch.quantile(score, 1.0 - self.outlier_ratio)
         mask = score <= threshold
         X_filtered = X[mask]
         n_excluded = int((~mask).sum())
@@ -141,7 +179,8 @@ class GalaxyEM:
             return X, n_excluded
         return X_filtered, n_excluded
 
-    def update_prototypes(self, X: torch.Tensor) -> None:
+    def update_prototypes(self, X: torch.Tensor) -> torch.Tensor:
+        """Fit SMM on encoded X. Returns Z (encoded embeddings)."""
         with torch.no_grad():
             Z = self.model.encoder(X)
 
@@ -150,7 +189,12 @@ class GalaxyEM:
                 "Encoder output contains NaN/Inf — cannot update prototypes"
             )
 
-        smm = SMMTorch(**self._smm_params)  # type: ignore[arg-type]
+        smm = SMMTorch(
+            n_components=self.config.k,
+            n_iter=self.config.smm_n_iter,
+            tol=self.config.smm_tol,
+            random_state=self.config.seed,
+        )
         smm.fit(Z)
 
         if smm.means_ is None:
@@ -162,7 +206,9 @@ class GalaxyEM:
 
         self.means = smm.means_.detach().to(torch.float32)
         self.weights = smm.weights_.detach().to(torch.float32)
-        self.covars = smm.covars_.detach().clamp(min=VAR_FLOOR).to(torch.float32)
+        self.covars = smm.covars_.detach().to(torch.float32)
+
+        return Z
 
     def update_network(self, X: torch.Tensor) -> None:
         """Fine-tune autoencoder with reconstruction + gravity loss (log-space)."""
@@ -193,18 +239,7 @@ class GalaxyEM:
                 embed, self.means, self.covars, self.weights
             )
 
-            if self.config.gravity_version == "scalar":
-                gravity_loss = -aggregate_force_scalar(log_forces).sum()
-
-            elif self.config.gravity_version == "vector":
-                gravity_loss = -aggregate_force_vector(
-                    log_forces, self.means, embed
-                ).sum()
-
-            else:
-                raise ValueError(
-                    f"Unknown gravity_version: {self.config.gravity_version}"
-                )
+            gravity_loss = self._compute_gravity_loss(log_forces, self.means, embed)
 
             loss = recon_loss + gravity_loss
             if torch.isnan(loss) or torch.isinf(loss):

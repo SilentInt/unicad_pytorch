@@ -73,7 +73,7 @@ uv run python scripts/predict.py --model galaxy.pt --data test.csv --output-scor
 - `save(path)` / `Galaxy.load(path, device="cpu")` — persist/restore all fitted state
 - `threshold_` — absolute anomaly threshold (quantile `1 - effective_outlier_ratio_` of training scores)
 - `effective_outlier_ratio_` — the outlier ratio actually used in fit (from config or labels)
-- `fit_info_` — dict with `train_score_mean`, `train_score_std`, `threshold_`, `outlier_ratio`, `outlier_ratio_source` ("labels" or "config"), `n_excluded_per_iter`
+- `fit_info_` — read-only property assembling dict from `train_score_mean`, `train_score_std`, `threshold_`, `outlier_ratio`, `outlier_ratio_source` ("labels" or "config"), `n_excluded_per_iter`
 - `input_dim` — number of features from training data
 - `__repr__` — shows `Galaxy(not fitted)` or `Galaxy(input_dim=..., k=..., threshold_=...)`
 
@@ -108,12 +108,16 @@ Four-stage pipeline orchestrated by `Galaxy`:
 
 - **GalaxyEM owns scoring**: `GalaxyEM.score(X_tensor)` encapsulates the encode-then-score pattern. Galaxy delegates to `em.score()` and does not reach into EM internals. `score_type` is read from `self.config.score_type` inside EM, not passed by callers.
 - **gof_score is a function**: `gof.py` exports `gof_score(feat, means, covars, weights, score_type)` — a stateless module-level function, not a class. `covars` and `weights` are required (no None fallback).
-- **SMM is ephemeral**: `GalaxyEM` stores SMM constructor params in `_smm_params` and creates a fresh `SMMTorch` inside each `update_prototypes()` call. No `self.smm` attribute. Avoids stale state after load.
+- **SMM is ephemeral**: `GalaxyEM` creates a fresh `SMMTorch` inside each `update_prototypes()` call by reading params directly from `self.config`. No persistent SMM attribute. Avoids stale state after load.
 - **GalaxyEM.load_state()**: `Galaxy.load()` calls `em.load_state(means, weights, covars, n_excluded_per_iter)` instead of directly setting attributes. Restores complete EM state consistently.
+- **outlier_ratio single storage**: GalaxyEM holds `self.outlier_ratio` directly (constructor param, defaulting to `config.outlier_ratio`). Galaxy does NOT create a modified config copy — the original config is passed unchanged. `Galaxy.effective_outlier_ratio_` mirrors `em.outlier_ratio` for the public API.
+- **gravity_version resolved at construction**: `GalaxyEM.__init__` binds `self._compute_gravity_loss` to the appropriate aggregation function. No if/elif branching inside the training loop.
+- **fit_info_ is a property**: `Galaxy.fit_info_` is a read-only `@property` that assembles its dict from authoritative sources (`self.threshold_`, `self.effective_outlier_ratio_`, `self.em.n_excluded_per_iter`, etc.). No duplicated mutable state.
 - **Log-space scoring**: GOF scores are `-log(force)`, not `1/force`. Avoids division-by-zero, keeps scores finite. Ranking identical for AUC.
 - **gravity.py is the single source of truth**: All log-force computation shares `compute_log_forces`. The SMM E-step uses `mahalanobis_diag` directly (its `log_resp` lacks the `-log(π)` term that GOF/EM include).
-- **VAR_FLOOR constant**: Defined once in `gravity.py` (`1e-6`), imported everywhere. No duplicate definitions.
-- **Full-dataset re-scoring**: EM exclude step always re-scores the full X, not the filtered subset.
+- **VAR_FLOOR constant**: Defined once in `gravity.py` (`1e-6`), imported everywhere. Clamped at two points: SMM M-step output (source) and `mahalanobis_diag` (lowest-level safety net). No redundant mid-chain clamping.
+- **EM loop encoder reuse**: `update_prototypes` returns Z; the EM loop passes Z to `_exclude_outlier_set` to avoid redundant encoding of the full X. After `update_network` changes the encoder, Z is recomputed once.
+- **Save format**: Flat dict with `effective_outlier_ratio_`, `train_score_mean`, `train_score_std`, `outlier_ratio_source`, `em_n_excluded_per_iter` as top-level keys. `load()` supports both new flat format and legacy nested `fit_info_` format.
 - **Gravity version + score type**: Default is `vector`/`vector` (matched pair). Scalar gravity with vector scoring triggers a `UserWarning` from `GalaxyConfig`.
 - **Absolute threshold**: `predict()` uses `threshold_` learned from training scores (quantile `1 - effective_outlier_ratio_`), not relative to the test batch.
 - **Label-informed outlier ratio**: When `y_train` is provided to `fit()`, the true anomaly rate (`y_train.mean()`) is stored as `effective_outlier_ratio_` for EM exclusion and threshold computation. The original `config.outlier_ratio` is NOT mutated. Stored in `fit_info_["outlier_ratio_source"]` as "labels" or "config".
