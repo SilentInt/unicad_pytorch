@@ -18,7 +18,7 @@ class GalaxyConfig:
     em_finetune_steps: int = 100
     em_finetune_lr: float = 3e-4
     preprocess: str = "z-score"
-    gravity_version: str = "scalar"
+    gravity_version: str = "vector"
     score_type: str = "vector"
     pretrain: bool = True
     smm_n_iter: int = 100
