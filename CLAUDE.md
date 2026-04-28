@@ -6,7 +6,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Unicad-torch is a PyTorch reimplementation of the Galaxy anomaly detection model ("Towards a Unified Framework of Clustering-based Anomaly Detection"). It uses a gravitational analogy where cluster centers exert "gravity" on data points; anomalies receive less gravitational force and thus score higher.
 
-This is a clean standalone reimplementation with no dependency on PyTorch Lightning, ADBench, or TensorFlow.
+Standalone reimplementation — no PyTorch Lightning, ADBench, or TensorFlow dependency.
+
+## Quick Start
+
+```python
+from unicad_torch import Galaxy, GalaxyConfig
+
+# Train
+config = GalaxyConfig(device="cpu", verbose=True)
+model = Galaxy(config)
+model.fit(X_train)                        # X_train: np.ndarray (N, D), float32
+
+# Score
+scores = model.predict_score(X_test)      # continuous scores, higher = more anomalous
+labels = model.predict(X_test)            # 0/1 labels via training threshold
+
+# Persist
+model.save("galaxy.pt")
+model = Galaxy.load("galaxy.pt", device="cpu")
+
+# Inspect
+print(model)                              # Galaxy(input_dim=32, k=10, threshold_=1.23)
+print(model.threshold_)                   # absolute anomaly threshold from training
+print(model.fit_info_)                    # {"train_score_mean": ..., "n_excluded_per_iter": [...]}
+```
 
 ## Commands
 
@@ -14,59 +38,90 @@ This is a clean standalone reimplementation with no dependency on PyTorch Lightn
 # Install (with dev tools)
 uv sync --extra dev
 
-# Run diagnostic test (exercises all pipeline stages with real ADBench data)
+# Run diagnostic test
 uv run python scripts/test_modules.py
 
-# Lint
+# Lint / format / type check
 uv run ruff check src/ scripts/
-
-# Format check
 uv run ruff format --check src/ scripts/
-
-# Type check
 uv run pyright src/
-uv run mypy src/
 
 # Download ADBench datasets
 uv run python scripts/download_data.py --category Classical
 
 # Run benchmarks
 uv run python scripts/run_benchmark.py --data-dir data/Classical
+uv run python scripts/run_benchmark.py --datasets 38_thyroid --verbose
 ```
+
+## Public API
+
+**`Galaxy`** (`galaxy.py`) — main model class:
+- `fit(X_train, y_train=None)` — train the four-stage pipeline; `y_train` is ignored (unsupervised)
+- `predict_score(X)` — return continuous anomaly scores (`np.float32`)
+- `predict(X)` — return binary 0/1 labels using `threshold_` from training (`np.int32`)
+- `fit_predict(X_train, y_train=None)` — fit then return training scores
+- `save(path)` / `Galaxy.load(path, device="cpu")` — persist/restore all fitted state
+- `threshold_` — absolute anomaly threshold (99th percentile of training scores by default)
+- `fit_info_` — dict with `train_score_mean`, `train_score_std`, `threshold_`, `n_excluded_per_iter`
+- `input_dim` — number of features from training data
+- `__repr__` — shows `Galaxy(not fitted)` or `Galaxy(input_dim=..., k=..., threshold_=...)`
+
+**`GalaxyConfig`** (`config.py`) — dataclass with `__post_init__` validation and `replace(**overrides)` method.
+
+**`GalaxyADBench`** (`adapter.py`) — ADBench-compatible wrapper exposing `fit`, `predict_score`, `predict`, `save`, `load`, `threshold_`, `fit_info_`.
 
 ## Architecture
 
-The Galaxy model is a four-stage pipeline orchestrated by `Galaxy` in `galaxy.py`:
+Four-stage pipeline orchestrated by `Galaxy`:
 
-1. **Preprocessing** (`preprocessing.py`): `StandardScaler` (z-score) or `RowScaler` (L2 per-row normalization), selected via `GalaxyConfig.preprocess`.
+1. **Preprocessing** (`preprocessing.py`): `StandardScaler` (z-score, `correction=0`) or `RowScaler` (L2 per-row norm), selected via `GalaxyConfig.preprocess`.
 
-2. **Autoencoder Pretraining** (`model.py`): `Encoder` -> `Decoder` with MSE(sum) loss, Adam + StepLR. `pretrain_autoencoder()` trains for 200 epochs. `estimate_alpha()` computes distance thresholds.
+2. **Autoencoder Pretraining** (`model.py`): `Encoder` -> `Decoder` with MSE(sum) loss, Adam + StepLR. `pretrain_autoencoder()` trains for 200 epochs. Supports `verbose` loss logging.
 
 3. **Iterative EM** (`em.py`): `GalaxyEM.fit()` runs `em_iters` rounds, each:
    - **Exclude outliers**: GOF-score all data, remove top `outlier_ratio`%
    - **Update network**: fine-tune autoencoder with reconstruction + gravity loss
    - **Update prototypes**: encode data -> fit SMM -> update means/weights/covars
 
-4. **GOF Scoring** (`gof.py`): Anomaly score = `-log(force)`, computed entirely in log-space for numerical stability. Monotonically equivalent to `1/force` for ranking. Scalar mode: `-logsumexp(log F_ik)`. Vector mode: `-[log(||force_vec||) + max_log_force]`.
+4. **GOF Scoring** (`gof.py`): Anomaly score = `-log(force)`, computed in log-space. Scalar mode: `-logsumexp(log F_ik)`. Vector mode: `-[log(||force_vec||) + max_log_force]`.
 
 **Supporting modules**:
-- `config.py`: `GalaxyConfig` dataclass -- single source of truth for all hyperparameters with paper defaults
-- `adapter.py`: `GalaxyADBench` -- ADBench-compatible wrapper (y_train ignored, unsupervised)
-- `smm_torch.py`: `SMMTorch` -- GPU-native Student-t Mixture Model with diagonal covariance (ν=1); includes `_mahalanobis_diag()` and `_kmeans_pp_init()`
+- `config.py`: `GalaxyConfig` dataclass — hyperparameters with validation
+- `adapter.py`: `GalaxyADBench` — ADBench-compatible wrapper
+- `smm_torch.py`: `SMMTorch` — GPU-native Student-t Mixture Model (ν=1); device-aware Generator; relative tolerance convergence
 
 ## Critical Implementation Details
 
-- **Log-space scoring**: GOF scores are `-log(force)`, not `1/force`. This avoids division-by-zero and keeps scores finite in high dimensions. For AUC-based metrics the ranking is identical.
-- **float64 det_covars**: `em.py` computes `det_covars` in float64. The product of 128 small variance values underflows in float32 -- this is a numerical stability requirement, not an optimization. (Note: `gof.py` avoids `det_covars` entirely by using `torch.log(covars).sum()`.)
-- **Full-dataset re-scoring**: The EM exclude step always re-scores the full X, not the filtered subset.
-- **Gravity loss versions**: "scalar" (`-sum_i log(sum_c force_ic)`) and "vector" (`-sum_i log(||sum_c vec_f_ic||)`), controlled by `GalaxyConfig.gravity_version`.
-- **No PyTorch Lightning**: Uses vanilla PyTorch only.
+- **Log-space scoring**: GOF scores are `-log(force)`, not `1/force`. Avoids division-by-zero, keeps scores finite. Ranking identical for AUC.
+- **float64 det_covars**: `em.py` computes determinant in float64 to avoid underflow. `gof.py` uses `torch.log(covars).sum()` instead.
+- **Full-dataset re-scoring**: EM exclude step always re-scores the full X, not the filtered subset.
+- **Gravity version + score type**: Default is `vector`/`vector` (matched pair). Scalar gravity with vector scoring is a mismatch that wastes training effect.
+- **Absolute threshold**: `predict()` uses `threshold_` learned from training scores (quantile `1 - outlier_ratio`), not relative to the test batch.
+- **Input requirements**: float32 preferred (float64 triggers warning); no NaN/Inf; minimum `k` samples.
 
-## Package Structure
+## GalaxyConfig Fields
 
-`src/unicad_torch/` layout with `hatchling` build backend. Public API exported from `__init__.py`: `Galaxy`, `GalaxyADBench`, `GalaxyConfig`, `SMMTorch`.
-
-**Known issue**: `GalaxyADBench` is declared in `__all__` but not imported in `__init__.py` -- `from unicad_torch import GalaxyADBench` will raise `ImportError`. Needs `from unicad_torch.adapter import GalaxyADBench` added.
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `seed` | int | 42 | Random seed |
+| `k` | int | 10 | Number of clusters |
+| `outlier_ratio` | float | 0.01 | Expected anomaly fraction, in [0, 1) |
+| `hidden_dim` | int | 128 | Autoencoder hidden/latent dimension |
+| `pretrain_epochs` | int | 200 | AE pretraining epochs |
+| `pretrain_lr` | float | 3e-3 | AE learning rate |
+| `pretrain_batch_size` | int | 1024 | AE batch size |
+| `em_iters` | int | 3 | EM iterations |
+| `em_finetune_steps` | int | 100 | Fine-tune steps per EM iteration |
+| `em_finetune_lr` | float | 3e-4 | Fine-tune learning rate |
+| `preprocess` | str | "z-score" | "z-score", "row-norm", or "none" |
+| `gravity_version` | str | "vector" | "scalar" or "vector" |
+| `score_type` | str | "vector" | "scalar" or "vector" |
+| `pretrain` | bool | True | Skip AE pretraining if False |
+| `smm_n_iter` | int | 100 | SMM EM iterations |
+| `smm_tol` | float | 1e-3 | SMM convergence tolerance (relative) |
+| `device` | str | "cpu" | Torch device |
+| `verbose` | bool | False | Print training progress |
 
 ## Data
 

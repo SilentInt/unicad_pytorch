@@ -59,7 +59,10 @@ def pretrain_autoencoder(
     optimizer = torch.optim.Adam(model.parameters(), lr=config.pretrain_lr)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=0.1)
 
-    for _epoch in range(config.pretrain_epochs):
+    log_interval = max(1, config.pretrain_epochs // 10)
+
+    for epoch in range(config.pretrain_epochs):
+        epoch_loss = 0.0
         for (batch,) in loader:
             batch = batch.to(config.device)
             _, x_hat = model(batch)
@@ -67,7 +70,16 @@ def pretrain_autoencoder(
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            epoch_loss += loss.item()
         scheduler.step()
+
+        if config.verbose and (
+            epoch % log_interval == 0 or epoch == config.pretrain_epochs - 1
+        ):
+            print(
+                f"  [Pretrain] epoch {epoch + 1}/{config.pretrain_epochs}  "
+                f"loss={epoch_loss:.4f}"
+            )
 
     model.eval()
     return model

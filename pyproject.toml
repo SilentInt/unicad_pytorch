@@ -1,7 +1,7 @@
 
 [project]
 name = "unicad-torch"
-version = "0.1.0"
+version = "0.2.0"
 description = "Galaxy: gravitational clustering-based anomaly detection (PyTorch reimplementation)"
 requires-python = ">=3.9"
 dependencies = [
@@ -9,7 +9,6 @@ dependencies = [
     "scipy>=1.10",
     "scikit-learn>=1.2",
     "torch>=2.6.0",
-    "smm>=0.1.5",
 ]
 
 [project.optional-dependencies]

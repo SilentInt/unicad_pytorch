@@ -25,7 +25,6 @@ import argparse
 import os
 import sys
 import time
-import warnings
 
 import numpy as np
 from sklearn.metrics import roc_auc_score
@@ -77,14 +76,14 @@ def run_single(
     model = Galaxy(config)
 
     t0 = time.perf_counter()
-    with warnings.catch_warnings():
-        # warnings.simplefilter("ignore")
-        model.fit(X)
+    model.fit(X)
     fit_time = time.perf_counter() - t0
 
     t0 = time.perf_counter()
     scores = model.predict_score(X)
     score_time = time.perf_counter() - t0
+
+    threshold = model.threshold_
 
     has_nan = np.isnan(scores).any()
     has_inf = np.isinf(scores).any()
@@ -105,6 +104,7 @@ def run_single(
         "n_samples": n_samples,
         "n_features": n_features,
         "anomaly_rate": f"{anomaly_rate:.4f}",
+        "threshold": f"{threshold:.4f}" if threshold is not None else "N/A",
         "auc": auc,
         "fit_time": f"{fit_time:.2f}",
         "score_time": f"{score_time:.2f}",
@@ -123,6 +123,7 @@ def print_table(results: list[dict[str, object]]) -> None:
         "n_samples",
         "n_features",
         "anomaly_rate",
+        "threshold",
         "auc",
         "fit_time",
         "status",
@@ -193,40 +194,48 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--preprocess", choices=["z-score", "row-norm", "none"], default=None
     )
+    parser.add_argument("--gravity-version", choices=["scalar", "vector"], default=None)
     parser.add_argument("--score-type", choices=["scalar", "vector"], default=None)
     parser.add_argument("--device", default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--no-pretrain", action="store_true")
+    parser.add_argument("--verbose", action="store_true")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
 
-    # Build config from overrides
-    config = GalaxyConfig()
+    # Build config from overrides using replace()
+    overrides: dict[str, object] = {}
     if args.k is not None:
-        config.k = args.k
+        overrides["k"] = args.k
     if args.hidden_dim is not None:
-        config.hidden_dim = args.hidden_dim
+        overrides["hidden_dim"] = args.hidden_dim
     if args.pretrain_epochs is not None:
-        config.pretrain_epochs = args.pretrain_epochs
+        overrides["pretrain_epochs"] = args.pretrain_epochs
     if args.em_iters is not None:
-        config.em_iters = args.em_iters
+        overrides["em_iters"] = args.em_iters
     if args.em_finetune_steps is not None:
-        config.em_finetune_steps = args.em_finetune_steps
+        overrides["em_finetune_steps"] = args.em_finetune_steps
     if args.outlier_ratio is not None:
-        config.outlier_ratio = args.outlier_ratio
+        overrides["outlier_ratio"] = args.outlier_ratio
     if args.preprocess is not None:
-        config.preprocess = args.preprocess
+        overrides["preprocess"] = args.preprocess
+    if args.gravity_version is not None:
+        overrides["gravity_version"] = args.gravity_version
     if args.score_type is not None:
-        config.score_type = args.score_type
+        overrides["score_type"] = args.score_type
     if args.device is not None:
-        config.device = args.device
+        overrides["device"] = args.device
     if args.seed is not None:
-        config.seed = args.seed
+        overrides["seed"] = args.seed
     if args.no_pretrain:
-        config.pretrain = False
+        overrides["pretrain"] = False
+    if args.verbose:
+        overrides["verbose"] = True
+
+    config = GalaxyConfig().replace(**overrides)
 
     datasets = find_datasets(args.data_dir, args.datasets)
     if not datasets:
@@ -239,8 +248,8 @@ def main() -> None:
     print(
         f"Config: k={config.k}, hidden_dim={config.hidden_dim}, "
         f"pretrain={config.pretrain}({config.pretrain_epochs}ep), "
-        f"em_iters={config.em_iters}, score_type={config.score_type}, "
-        f"device={config.device}"
+        f"em_iters={config.em_iters}, gravity={config.gravity_version}, "
+        f"score={config.score_type}, device={config.device}"
     )
     print()
 
@@ -264,6 +273,7 @@ def main() -> None:
                     "n_samples": "?",
                     "n_features": "?",
                     "anomaly_rate": "?",
+                    "threshold": "N/A",
                     "auc": float("nan"),
                     "fit_time": "?",
                     "score_time": "?",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 
 
@@ -24,6 +25,7 @@ class GalaxyConfig:
     smm_n_iter: int = 100
     smm_tol: float = 1e-3
     device: str = "cpu"
+    verbose: bool = False
 
     def __post_init__(self) -> None:
         if self.preprocess not in {"z-score", "row-norm", "none"}:
@@ -68,3 +70,7 @@ class GalaxyConfig:
             raise ValueError(f"em_finetune_lr must be > 0, got {self.em_finetune_lr}")
         if self.smm_tol <= 0:
             raise ValueError(f"smm_tol must be > 0, got {self.smm_tol}")
+
+    def replace(self, **overrides: object) -> GalaxyConfig:
+        """Return a new GalaxyConfig with specified fields overridden."""
+        return dataclasses.replace(self, **overrides)

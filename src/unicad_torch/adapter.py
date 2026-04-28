@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 
 from unicad_torch.config import GalaxyConfig
@@ -27,7 +29,25 @@ class GalaxyADBench:
         return self._galaxy.predict_score(X)
 
     def predict(self, X: np.ndarray) -> np.ndarray:
-        """Return binary anomaly labels (0=normal, 1=anomaly) via outlier_ratio threshold."""
-        scores = self._galaxy.predict_score(X)
-        threshold = np.quantile(scores, 1.0 - self.config.outlier_ratio)
-        return (scores > threshold).astype(np.int32)
+        """Return binary anomaly labels (0=normal, 1=anomaly)."""
+        return self._galaxy.predict(X)
+
+    def save(self, path: str | Path) -> None:
+        """Save fitted model to disk."""
+        self._galaxy.save(path)
+
+    @classmethod
+    def load(cls, path: str | Path, device: str = "cpu") -> GalaxyADBench:
+        """Load a fitted model from disk."""
+        galaxy = Galaxy.load(path, device=device)
+        adapter = cls(galaxy.config)
+        adapter._galaxy = galaxy
+        return adapter
+
+    @property
+    def threshold_(self) -> float | None:
+        return self._galaxy.threshold_
+
+    @property
+    def fit_info_(self) -> dict[str, object]:
+        return self._galaxy.fit_info_

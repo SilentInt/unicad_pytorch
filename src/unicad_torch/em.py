@@ -47,15 +47,38 @@ class GalaxyEM:
     def fit(self, X: torch.Tensor) -> GalaxyEM:
         self.update_prototypes(X)
 
+        n_excluded_per_iter: list[int] = []
         for _iter in range(self.config.em_iters):
-            X_filtered = self._exclude_outlier_set(X)
+            X_filtered, n_excluded = self._exclude_outlier_set(X)
+            n_excluded_per_iter.append(n_excluded)
             self.update_network(X_filtered)
             self.update_prototypes(X_filtered)
 
+            if self.config.verbose:
+                with torch.no_grad():
+                    Z = self.model.encoder(X)
+                if self.means is not None and self.covars is not None:
+                    score = self.scorer.get_score(
+                        Z,
+                        self.means,
+                        covars=self.covars,
+                        weights=self.weights,
+                        score_type=self.config.score_type,
+                    )
+                    print(
+                        f"  [EM iter {_iter + 1}/{self.config.em_iters}]  "
+                        f"excluded={n_excluded}  "
+                        f"score=[{score.min():.2f}, {score.max():.2f}]"
+                    )
+
+        self.n_excluded_per_iter = n_excluded_per_iter
         return self
 
-    def _exclude_outlier_set(self, X: torch.Tensor) -> torch.Tensor:
-        """Re-score the FULL X, then filter top outlier_ratio% out."""
+    def _exclude_outlier_set(self, X: torch.Tensor) -> tuple[torch.Tensor, int]:
+        """Re-score the FULL X, then filter top outlier_ratio% out.
+
+        Returns (filtered_X, n_excluded).
+        """
         with torch.no_grad():
             Z = self.model.encoder(X)
         if self.means is None:
@@ -76,15 +99,16 @@ class GalaxyEM:
 
         if torch.isnan(score).any() or torch.isinf(score).any():
             warnings.warn("GOF score contains NaN/Inf — skipping outlier exclusion")
-            return X
+            return X, 0
 
         threshold = torch.quantile(score, 1.0 - self.config.outlier_ratio)
         mask = score <= threshold
         X_filtered = X[mask]
+        n_excluded = int((~mask).sum())
 
         if X_filtered.shape[0] == 0:
-            return X
-        return X_filtered
+            return X, n_excluded
+        return X_filtered, n_excluded
 
     def update_prototypes(self, X: torch.Tensor) -> None:
         with torch.no_grad():
