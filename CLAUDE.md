@@ -45,9 +45,9 @@ uv run pytest tests/ -v
 uv run python scripts/test_modules.py
 
 # Lint / format / type check
-uv run ruff check src/ scripts/
-uv run ruff format --check src/ scripts/
-uv run pyright src/ scripts/
+uv run ruff check src/ scripts/ tests/
+uv run ruff format --check src/ scripts/ tests/
+uv run pyright src/ tests/
 
 # Download ADBench datasets
 uv run python scripts/download_data.py --category Classical

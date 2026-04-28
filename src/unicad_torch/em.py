@@ -161,7 +161,9 @@ class GalaxyEM:
 
             recon_loss = F.mse_loss(x_hat, X, reduction="sum")
 
-            log_forces = compute_log_forces(embed, self.means, self.covars, self.weights)
+            log_forces = compute_log_forces(
+                embed, self.means, self.covars, self.weights
+            )
 
             if self.config.gravity_version == "scalar":
                 gravity_loss = -aggregate_force_scalar(log_forces).sum()

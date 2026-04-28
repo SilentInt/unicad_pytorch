@@ -400,7 +400,9 @@ def main() -> None:
 
     # Batch mode
     else:
-        datasets = find_datasets(args.data_dir, args.datasets, extensions=(".npz", ".csv"))
+        datasets = find_datasets(
+            args.data_dir, args.datasets, extensions=(".npz", ".csv")
+        )
         if not datasets:
             print("No datasets found.")
             sys.exit(1)

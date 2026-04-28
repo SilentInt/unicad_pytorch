@@ -75,7 +75,9 @@ class TestGalaxyLabelAware:
 
     def test_config_not_mutated(self, small_X_with_labels):
         X, y = small_X_with_labels
-        config = GalaxyConfig(outlier_ratio=0.01, pretrain_epochs=2, em_iters=1, em_finetune_steps=2)
+        config = GalaxyConfig(
+            outlier_ratio=0.01, pretrain_epochs=2, em_iters=1, em_finetune_steps=2
+        )
         model = Galaxy(config)
         model.fit(X, y)
         assert model.config.outlier_ratio == 0.01  # original unchanged
@@ -108,6 +110,8 @@ class TestGalaxySaveLoad:
             model.save(path)
             loaded = Galaxy.load(path)
 
+        assert loaded.threshold_ is not None
+        assert model.threshold_ is not None
         assert abs(loaded.threshold_ - model.threshold_) < 1e-5
 
     def test_save_before_fit_raises(self):

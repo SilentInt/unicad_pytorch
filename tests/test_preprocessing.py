@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 import torch
 
 from unicad_torch.preprocessing import RowScaler, StandardScaler
@@ -35,16 +36,13 @@ class TestStandardScaler:
         with pytest.raises(RuntimeError, match="not fitted"):
             scaler.transform(torch.randn(10, 4))
 
-    def test_idempotent(self):
+    def test_fit_transform_deterministic(self):
         X = torch.randn(50, 4)
-        scaler = StandardScaler()
-        X1 = scaler.fit_transform(X)
-        X2 = scaler.transform(X1)
-        # Second transform should NOT be idempotent (different mean/std)
-        # but fit_transform is deterministic
+        scaler1 = StandardScaler()
+        X1 = scaler1.fit_transform(X)
         scaler2 = StandardScaler()
-        X3 = scaler2.fit_transform(X)
-        assert torch.allclose(X1, X3)
+        X2 = scaler2.fit_transform(X)
+        assert torch.allclose(X1, X2)
 
 
 class TestRowScaler:
@@ -73,6 +71,3 @@ class TestRowScaler:
         X_l1 = scaler_l1.fit_transform(X)
         l1_norms = X_l1.abs().sum(dim=1)
         assert (l1_norms - 1).abs().max() < 1e-5
-
-
-import pytest

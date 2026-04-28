@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 import torch
 
 from unicad_torch.gof import GOFScorer
@@ -14,7 +15,9 @@ class TestGOFScorer:
         means = torch.randn(3, 4)
         covars = torch.ones(3, 4)
         weights = torch.full((3,), 1.0 / 3)
-        scores = scorer.get_score(Z, means, covars=covars, weights=weights, score_type="scalar")
+        scores = scorer.get_score(
+            Z, means, covars=covars, weights=weights, score_type="scalar"
+        )
         assert scores.shape == (20,)
 
     def test_vector_score_shape(self):
@@ -23,7 +26,9 @@ class TestGOFScorer:
         means = torch.randn(3, 4)
         covars = torch.ones(3, 4)
         weights = torch.full((3,), 1.0 / 3)
-        scores = scorer.get_score(Z, means, covars=covars, weights=weights, score_type="vector")
+        scores = scorer.get_score(
+            Z, means, covars=covars, weights=weights, score_type="vector"
+        )
         assert scores.shape == (20,)
 
     def test_scores_finite(self):
@@ -33,7 +38,9 @@ class TestGOFScorer:
         covars = torch.ones(3, 4)
         weights = torch.full((3,), 1.0 / 3)
         for st in ["scalar", "vector"]:
-            scores = scorer.get_score(Z, means, covars=covars, weights=weights, score_type=st)
+            scores = scorer.get_score(
+                Z, means, covars=covars, weights=weights, score_type=st
+            )
             assert scores.isfinite().all(), f"Non-finite scores for score_type={st}"
 
     def test_default_covars(self):
@@ -62,7 +69,9 @@ class TestGOFScorer:
         Z = torch.cat([normal, anomaly])
         covars = torch.ones(3, 4)
         weights = torch.full((3,), 1.0 / 3)
-        scores = scorer.get_score(Z, means, covars=covars, weights=weights, score_type="scalar")
+        scores = scorer.get_score(
+            Z, means, covars=covars, weights=weights, score_type="scalar"
+        )
 
         normal_mean = scores[:10].mean().item()
         anomaly_mean = scores[10:].mean().item()
@@ -74,6 +83,3 @@ class TestGOFScorer:
         means = torch.randn(3, 4)
         with pytest.raises(ValueError, match="score_type"):
             scorer.get_score(Z, means, score_type="other")
-
-
-import pytest
