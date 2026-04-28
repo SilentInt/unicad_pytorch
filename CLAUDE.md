@@ -14,21 +14,18 @@ This is a clean standalone reimplementation with no dependency on PyTorch Lightn
 # Install (with dev tools)
 uv sync --extra dev
 
-# Run all tests
-uv run pytest tests/ -v
-
-# Run a single test
-uv run pytest tests/test_galaxy.py::test_galaxy_fit_predict -v
+# Run diagnostic test (exercises all pipeline stages with real ADBench data)
+uv run python scripts/test_modules.py
 
 # Lint
-uv run ruff check src/ tests/
+uv run ruff check src/ scripts/
 
 # Format check
-uv run ruff format --check src/ tests/
+uv run ruff format --check src/ scripts/
 
 # Type check
-uv run pyright src/ tests/
-uv run mypy src/ tests/
+uv run pyright src/
+uv run mypy src/
 
 # Download ADBench datasets
 uv run python scripts/download_data.py --category Classical
@@ -50,23 +47,26 @@ The Galaxy model is a four-stage pipeline orchestrated by `Galaxy` in `galaxy.py
    - **Update network**: fine-tune autoencoder with reconstruction + gravity loss
    - **Update prototypes**: encode data -> fit SMM -> update means/weights/covars
 
-4. **GOF Scoring** (`gof.py`): Anomaly score = 1 / gravitational force. Scalar mode: `1 / sum_c force(x_i, mu_c)`. Vector mode: `1 / ||sum_c vec_f(x_i, mu_c)||`.
+4. **GOF Scoring** (`gof.py`): Anomaly score = `-log(force)`, computed entirely in log-space for numerical stability. Monotonically equivalent to `1/force` for ranking. Scalar mode: `-logsumexp(log F_ik)`. Vector mode: `-[log(||force_vec||) + max_log_force]`.
 
 **Supporting modules**:
 - `config.py`: `GalaxyConfig` dataclass -- single source of truth for all hyperparameters with paper defaults
 - `adapter.py`: `GalaxyADBench` -- ADBench-compatible wrapper (y_train ignored, unsupervised)
-- `smm.py`: `SMMPyTorch` -- GPU-native t-Student Mixture Model; patches `np.infty` -> `np.inf` for NumPy 2.0+ compatibility; re-exports `SMM`
+- `smm_torch.py`: `SMMTorch` -- GPU-native Student-t Mixture Model with diagonal covariance (ν=1); includes `_mahalanobis_diag()` and `_kmeans_pp_init()`
 
 ## Critical Implementation Details
 
-- **float64 det_covars**: Both `em.py` and `gof.py` compute `det_covars` in float64. The product of 128 small variance values underflows in float32 -- this is a numerical stability requirement, not an optimization.
+- **Log-space scoring**: GOF scores are `-log(force)`, not `1/force`. This avoids division-by-zero and keeps scores finite in high dimensions. For AUC-based metrics the ranking is identical.
+- **float64 det_covars**: `em.py` computes `det_covars` in float64. The product of 128 small variance values underflows in float32 -- this is a numerical stability requirement, not an optimization. (Note: `gof.py` avoids `det_covars` entirely by using `torch.log(covars).sum()`.)
 - **Full-dataset re-scoring**: The EM exclude step always re-scores the full X, not the filtered subset.
 - **Gravity loss versions**: "scalar" (`-sum_i log(sum_c force_ic)`) and "vector" (`-sum_i log(||sum_c vec_f_ic||)`), controlled by `GalaxyConfig.gravity_version`.
 - **No PyTorch Lightning**: Uses vanilla PyTorch only.
 
 ## Package Structure
 
-`src/unicad_torch/` layout with `hatchling` build backend. Public API exported from `__init__.py`: `Galaxy`, `GalaxyADBench`, `GalaxyConfig`.
+`src/unicad_torch/` layout with `hatchling` build backend. Public API exported from `__init__.py`: `Galaxy`, `GalaxyADBench`, `GalaxyConfig`, `SMMTorch`.
+
+**Known issue**: `GalaxyADBench` is declared in `__all__` but not imported in `__init__.py` -- `from unicad_torch import GalaxyADBench` will raise `ImportError`. Needs `from unicad_torch.adapter import GalaxyADBench` added.
 
 ## Data
 

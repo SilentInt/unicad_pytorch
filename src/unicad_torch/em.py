@@ -8,6 +8,7 @@ Each EM iteration:
 Gravity loss computed in log-space via logsumexp to avoid
 underflow/overflow from high-dimensional determinant products.
 """
+
 from __future__ import annotations
 
 import warnings
@@ -85,13 +86,19 @@ class GalaxyEM:
 
         self.smm.fit(Z)
 
+        assert self.smm.means_ is not None
+        assert self.smm.weights_ is not None
+        assert self.smm.covars_ is not None
+
         self.means = self.smm.means_.detach().to(torch.float32)
         self.weights = self.smm.weights_.detach().to(torch.float32)
         self.covars = self.smm.covars_.detach().clamp(min=_VAR_FLOOR).to(torch.float32)
 
     def update_network(self, X: torch.Tensor) -> None:
         """Fine-tune autoencoder with reconstruction + gravity loss (log-space)."""
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.em_finetune_lr)
+        optimizer = torch.optim.Adam(
+            self.model.parameters(), lr=self.config.em_finetune_lr
+        )
 
         assert self.means is not None
         assert self.weights is not None
@@ -110,10 +117,10 @@ class GalaxyEM:
 
             # Log-space force: log F_ik = log(ω_k) - log(π) - 0.5*log|Σ_k| - log(1 + D_M²)
             log_forces = (
-                torch.log(self.weights.clamp(min=1e-30)).unsqueeze(0)   # (1, K)
+                torch.log(self.weights.clamp(min=1e-30)).unsqueeze(0)  # (1, K)
                 - torch.log(torch.tensor(torch.pi, dtype=X.dtype, device=X.device))
-                - 0.5 * log_det_covars.unsqueeze(0)                     # (1, K)
-                - torch.log1p(maha)                                      # (N, K)
+                - 0.5 * log_det_covars.unsqueeze(0)  # (1, K)
+                - torch.log1p(maha)  # (N, K)
             )  # (N, K)
 
             if self.config.gravity_version == "scalar":
@@ -136,7 +143,9 @@ class GalaxyEM:
                 gravity_loss = -log_force_norm.sum()
 
             else:
-                raise ValueError(f"Unknown gravity_version: {self.config.gravity_version}")
+                raise ValueError(
+                    f"Unknown gravity_version: {self.config.gravity_version}"
+                )
 
             loss = recon_loss + gravity_loss
             if torch.isnan(loss) or torch.isinf(loss):

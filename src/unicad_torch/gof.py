@@ -9,6 +9,7 @@ For ranking-based metrics (AUC-ROC, AUC-PR), this is equivalent.
   Scalar: -logsumexp(log F_ik)
   Vector: -[log(||scaled_force_vec||) + max_log_force]
 """
+
 from __future__ import annotations
 
 import torch
@@ -46,9 +47,7 @@ class GOFScorer:
         if weights is None:
             _, indices = torch.min(maha, dim=1)
             weights = (
-                F.one_hot(indices.long(), num_classes=means.shape[0])
-                .float()
-                .sum(dim=0)
+                F.one_hot(indices.long(), num_classes=means.shape[0]).float().sum(dim=0)
                 / feat.shape[0]
             )
         weights = weights.reshape(1, -1).to(feat.device)
@@ -56,10 +55,10 @@ class GOFScorer:
         # Log-space force: log F_ik = log(ω_k) - log(π) - 0.5*log|Σ_k| - log(1 + D_M²)
         log_det_covars = torch.log(covars.clamp(min=1e-6)).sum(dim=1)  # (K,)
         log_forces = (
-            torch.log(weights.clamp(min=1e-30))                         # (1, K)
+            torch.log(weights.clamp(min=1e-30))  # (1, K)
             - torch.log(torch.tensor(torch.pi, dtype=feat.dtype, device=feat.device))
-            - 0.5 * log_det_covars.unsqueeze(0)                         # (1, K)
-            - torch.log1p(maha)                                          # (N, K)
+            - 0.5 * log_det_covars.unsqueeze(0)  # (1, K)
+            - torch.log1p(maha)  # (N, K)
         )  # (N, K)
 
         if score_type == "scalar":

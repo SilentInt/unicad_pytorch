@@ -44,14 +44,14 @@ def _kmeans_pp_init(
 
     # K-means++ seeding
     idx = torch.randint(N, (1,), generator=generator).item()
-    centres = [Z[idx]]
+    centres = [Z[int(idx)]]
 
     for _ in range(K - 1):
         dists = torch.cdist(Z, torch.stack(centres))  # (N, current_k)
         min_dists_sq = dists.min(dim=1).values ** 2  # (N,)
         probs = min_dists_sq / min_dists_sq.sum().clamp(min=1e-30)
         idx = torch.multinomial(probs, 1, generator=generator).item()
-        centres.append(Z[idx])
+        centres.append(Z[int(idx)])
 
     means = torch.stack(centres).to(device)  # (K, D)
 

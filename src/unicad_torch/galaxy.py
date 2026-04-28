@@ -9,6 +9,7 @@ Four-stage pipeline:
 All computation stays on the configured torch device.
 Numpy conversion only at the public API boundary (fit/predict_score).
 """
+
 from __future__ import annotations
 
 import numpy as np

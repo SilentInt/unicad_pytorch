@@ -6,6 +6,7 @@ Usage
     uv run python scripts/test_modules.py
     uv run python scripts/test_modules.py --datasets 38_thyroid 2_annthyroid
 """
+
 from __future__ import annotations
 
 import argparse
@@ -20,7 +21,7 @@ from sklearn.metrics import roc_auc_score
 
 from unicad_torch.config import GalaxyConfig
 from unicad_torch.preprocessing import StandardScaler, RowScaler
-from unicad_torch.model import Autoencoder, pretrain_autoencoder, estimate_alpha
+from unicad_torch.model import Autoencoder, pretrain_autoencoder
 from unicad_torch.smm_torch import SMMTorch, _mahalanobis_diag
 from unicad_torch.gof import GOFScorer
 from unicad_torch.em import GalaxyEM
@@ -44,9 +45,9 @@ def _stats(arr: np.ndarray | torch.Tensor, name: str) -> str:
 
 
 def _section(title: str) -> None:
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print(f"  {title}")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
 
 
 # ---------------------------------------------------------------------------
@@ -58,15 +59,19 @@ def test_load_data(path: str) -> tuple[np.ndarray, np.ndarray]:
     X = data["X"].astype(np.float32)
     y = data["y"].ravel()
     print(_stats(X, "X_raw"))
-    print(f"y: shape={y.shape}  anomaly_rate={y.mean():.4f}  "
-          f"normal={int((y==0).sum())}  anomaly={int((y==1).sum())}")
+    print(
+        f"y: shape={y.shape}  anomaly_rate={y.mean():.4f}  "
+        f"normal={int((y == 0).sum())}  anomaly={int((y == 1).sum())}"
+    )
     return X, y
 
 
 # ---------------------------------------------------------------------------
 # 2. Preprocessing
 # ---------------------------------------------------------------------------
-def test_preprocessing(X: np.ndarray, config: GalaxyConfig) -> tuple[torch.Tensor, torch.Tensor]:
+def test_preprocessing(
+    X: np.ndarray, config: GalaxyConfig
+) -> tuple[torch.Tensor, torch.Tensor]:
     _section("2. Preprocessing")
 
     device = config.device
@@ -88,7 +93,9 @@ def test_preprocessing(X: np.ndarray, config: GalaxyConfig) -> tuple[torch.Tenso
 # ---------------------------------------------------------------------------
 # 3. Autoencoder
 # ---------------------------------------------------------------------------
-def test_autoencoder(X_tensor: torch.Tensor, config: GalaxyConfig) -> tuple[Autoencoder, torch.Tensor]:
+def test_autoencoder(
+    X_tensor: torch.Tensor, config: GalaxyConfig
+) -> tuple[Autoencoder, torch.Tensor]:
     _section("3. Autoencoder Pretraining")
 
     input_dim = X_tensor.shape[1]
@@ -98,7 +105,9 @@ def test_autoencoder(X_tensor: torch.Tensor, config: GalaxyConfig) -> tuple[Auto
         latent_dim=config.hidden_dim,
     ).to(config.device)
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"Autoencoder: input_dim={input_dim}, hidden_dim={config.hidden_dim}, params={n_params}")
+    print(
+        f"Autoencoder: input_dim={input_dim}, hidden_dim={config.hidden_dim}, params={n_params}"
+    )
 
     t0 = time.perf_counter()
     pretrain_autoencoder(model, X_tensor, config)
@@ -182,17 +191,23 @@ def test_gof(Z: torch.Tensor, smm: SMMTorch, config: GalaxyConfig) -> torch.Tens
     maha = _mahalanobis_diag(Z, means, covars)
     print(_stats(maha, "maha"))
     for c in range(min(5, means.shape[0])):
-        print(f"  component {c}: min={maha[:,c].min():.4g}  max={maha[:,c].max():.4g}  "
-              f"mean={maha[:,c].mean():.4g}")
+        print(
+            f"  component {c}: min={maha[:, c].min():.4g}  max={maha[:, c].max():.4g}  "
+            f"mean={maha[:, c].mean():.4g}"
+        )
 
     # Scalar score
     _section("5b. Scalar Score")
-    score_scalar = scorer.get_score(Z, means, covars=covars, weights=weights, score_type="scalar")
+    score_scalar = scorer.get_score(
+        Z, means, covars=covars, weights=weights, score_type="scalar"
+    )
     print(_stats(score_scalar, "score_scalar"))
 
     # Vector score
     _section("5c. Vector Score")
-    score_vector = scorer.get_score(Z, means, covars=covars, weights=weights, score_type="vector")
+    score_vector = scorer.get_score(
+        Z, means, covars=covars, weights=weights, score_type="vector"
+    )
     print(_stats(score_vector, "score_vector"))
 
     return score_vector
@@ -201,13 +216,17 @@ def test_gof(Z: torch.Tensor, smm: SMMTorch, config: GalaxyConfig) -> torch.Tens
 # ---------------------------------------------------------------------------
 # 6. Full EM
 # ---------------------------------------------------------------------------
-def test_em(model: Autoencoder, X_tensor: torch.Tensor, config: GalaxyConfig) -> GalaxyEM:
+def test_em(
+    model: Autoencoder, X_tensor: torch.Tensor, config: GalaxyConfig
+) -> GalaxyEM:
     _section("6. Full EM")
 
     em = GalaxyEM(model, config)
 
-    print(f"EM: iters={config.em_iters}, finetune_steps={config.em_finetune_steps}, "
-          f"finetune_lr={config.em_finetune_lr}, outlier_ratio={config.outlier_ratio}")
+    print(
+        f"EM: iters={config.em_iters}, finetune_steps={config.em_finetune_steps}, "
+        f"finetune_lr={config.em_finetune_lr}, outlier_ratio={config.outlier_ratio}"
+    )
 
     t0 = time.perf_counter()
     with warnings.catch_warnings(record=True) as w:
@@ -236,8 +255,9 @@ def test_em(model: Autoencoder, X_tensor: torch.Tensor, config: GalaxyConfig) ->
     with torch.no_grad():
         Z = model.encoder(X_tensor)
     scorer = GOFScorer(device=config.device)
-    score = scorer.get_score(Z, em.means, covars=em.covars, weights=em.weights,
-                             score_type=config.score_type)
+    score = scorer.get_score(
+        Z, em.means, covars=em.covars, weights=em.weights, score_type=config.score_type
+    )
     print(_stats(score, "em_score"))
 
     return em
@@ -276,10 +296,14 @@ def test_galaxy(X: np.ndarray, y: np.ndarray, config: GalaxyConfig) -> None:
 
         s_normal = scores[y == 0]
         s_anomaly = scores[y == 1]
-        print(f"  Normal scores:   mean={s_normal.mean():.6g}  std={s_normal.std():.6g}  "
-              f"min={s_normal.min():.6g}  max={s_normal.max():.6g}")
-        print(f"  Anomaly scores:  mean={s_anomaly.mean():.6g}  std={s_anomaly.std():.6g}  "
-              f"min={s_anomaly.min():.6g}  max={s_anomaly.max():.6g}")
+        print(
+            f"  Normal scores:   mean={s_normal.mean():.6g}  std={s_normal.std():.6g}  "
+            f"min={s_normal.min():.6g}  max={s_normal.max():.6g}"
+        )
+        print(
+            f"  Anomaly scores:  mean={s_anomaly.mean():.6g}  std={s_anomaly.std():.6g}  "
+            f"min={s_anomaly.min():.6g}  max={s_anomaly.max():.6g}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +325,9 @@ def test_adapter(X: np.ndarray, y: np.ndarray, config: GalaxyConfig) -> None:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-def find_datasets(data_dir: str, datasets: list[str] | None = None) -> list[tuple[str, str]]:
+def find_datasets(
+    data_dir: str, datasets: list[str] | None = None
+) -> list[tuple[str, str]]:
     results: list[tuple[str, str]] = []
     for root, _dirs, files in os.walk(data_dir):
         for f in sorted(files):
@@ -317,14 +343,21 @@ def find_datasets(data_dir: str, datasets: list[str] | None = None) -> list[tupl
 def main() -> None:
     parser = argparse.ArgumentParser(description="Module-by-module test with real data")
     parser.add_argument("--data-dir", default="data/Classical")
-    parser.add_argument("--datasets", nargs="+", default=["38_thyroid"],
-                        help="Dataset names to test (default: 38_thyroid)")
+    parser.add_argument(
+        "--datasets",
+        nargs="+",
+        default=["38_thyroid"],
+        help="Dataset names to test (default: 38_thyroid)",
+    )
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--k", type=int, default=10)
     parser.add_argument("--pretrain-epochs", type=int, default=200)
     parser.add_argument("--em-iters", type=int, default=3)
-    parser.add_argument("--skip-pretrain", action="store_true",
-                        help="Skip autoencoder pretrain (fast but meaningless)")
+    parser.add_argument(
+        "--skip-pretrain",
+        action="store_true",
+        help="Skip autoencoder pretrain (fast but meaningless)",
+    )
     args = parser.parse_args()
 
     config = GalaxyConfig(
@@ -341,9 +374,9 @@ def main() -> None:
         sys.exit(1)
 
     for name, path in datasets:
-        print(f"\n{'#'*70}")
+        print(f"\n{'#' * 70}")
         print(f"#  Dataset: {name}")
-        print(f"{'#'*70}")
+        print(f"{'#' * 70}")
 
         X, y = test_load_data(path)
 
@@ -370,9 +403,9 @@ def main() -> None:
         # 8. Adapter
         test_adapter(X, y, config)
 
-    print(f"\n{'#'*70}")
+    print(f"\n{'#' * 70}")
     print("#  All tests complete.")
-    print(f"{'#'*70}")
+    print(f"{'#' * 70}")
 
 
 if __name__ == "__main__":

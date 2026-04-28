@@ -3,6 +3,7 @@
 StandardScaler : z-score standardisation
 RowScaler      : L2 per-row normalisation
 """
+
 from __future__ import annotations
 
 import torch
@@ -21,6 +22,8 @@ class StandardScaler:
         return self
 
     def transform(self, X: torch.Tensor) -> torch.Tensor:
+        assert self.mean_ is not None
+        assert self.std_ is not None
         return (X - self.mean_) / self.std_
 
     def fit_transform(self, X: torch.Tensor) -> torch.Tensor:

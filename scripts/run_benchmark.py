@@ -33,7 +33,9 @@ from sklearn.metrics import roc_auc_score
 from unicad_torch import Galaxy, GalaxyConfig
 
 
-def find_datasets(data_dir: str, datasets: list[str] | None = None) -> list[tuple[str, str]]:
+def find_datasets(
+    data_dir: str, datasets: list[str] | None = None
+) -> list[tuple[str, str]]:
     """Find .npz files, optionally filtered by name. Returns (name, path) pairs."""
     results: list[tuple[str, str]] = []
     if not os.path.isdir(data_dir):
@@ -76,7 +78,7 @@ def run_single(
 
     t0 = time.perf_counter()
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
+        # warnings.simplefilter("ignore")
         model.fit(X)
     fit_time = time.perf_counter() - t0
 
@@ -116,7 +118,15 @@ def print_table(results: list[dict[str, object]]) -> None:
         print("No results.")
         return
 
-    cols = ["dataset", "n_samples", "n_features", "anomaly_rate", "auc", "fit_time", "status"]
+    cols = [
+        "dataset",
+        "n_samples",
+        "n_features",
+        "anomaly_rate",
+        "auc",
+        "fit_time",
+        "status",
+    ]
     widths = {c: max(len(str(r.get(c, ""))) for r in results) for c in cols}
     widths = {c: max(widths[c], len(c)) for c in cols}
 
@@ -130,9 +140,15 @@ def print_table(results: list[dict[str, object]]) -> None:
         print(row)
 
     print(sep)
-    valid_aucs = [r["auc"] for r in results if isinstance(r["auc"], float) and not np.isnan(r["auc"])]
+    valid_aucs = [
+        r["auc"]
+        for r in results
+        if isinstance(r["auc"], float) and not np.isnan(r["auc"])
+    ]
     if valid_aucs:
-        print(f"Mean AUC: {np.mean(valid_aucs):.4f} ({len(valid_aucs)}/{len(results)} valid)")
+        print(
+            f"Mean AUC: {np.mean(valid_aucs):.4f} ({len(valid_aucs)}/{len(results)} valid)"
+        )
 
 
 def save_csv(results: list[dict[str, object]], path: str) -> None:
@@ -174,7 +190,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--em-iters", type=int, default=None)
     parser.add_argument("--em-finetune-steps", type=int, default=None)
     parser.add_argument("--outlier-ratio", type=float, default=None)
-    parser.add_argument("--preprocess", choices=["z-score", "row-norm", "none"], default=None)
+    parser.add_argument(
+        "--preprocess", choices=["z-score", "row-norm", "none"], default=None
+    )
     parser.add_argument("--score-type", choices=["scalar", "vector"], default=None)
     parser.add_argument("--device", default=None)
     parser.add_argument("--seed", type=int, default=None)
@@ -212,14 +230,18 @@ def main() -> None:
 
     datasets = find_datasets(args.data_dir, args.datasets)
     if not datasets:
-        print("No datasets found. Download with: uv run python scripts/download_data.py")
+        print(
+            "No datasets found. Download with: uv run python scripts/download_data.py"
+        )
         sys.exit(1)
 
     print(f"Galaxy Benchmark — {len(datasets)} dataset(s)")
-    print(f"Config: k={config.k}, hidden_dim={config.hidden_dim}, "
-          f"pretrain={config.pretrain}({config.pretrain_epochs}ep), "
-          f"em_iters={config.em_iters}, score_type={config.score_type}, "
-          f"device={config.device}")
+    print(
+        f"Config: k={config.k}, hidden_dim={config.hidden_dim}, "
+        f"pretrain={config.pretrain}({config.pretrain_epochs}ep), "
+        f"em_iters={config.em_iters}, score_type={config.score_type}, "
+        f"device={config.device}"
+    )
     print()
 
     results: list[dict[str, object]] = []
@@ -228,20 +250,26 @@ def main() -> None:
         try:
             r = run_single(name, path, config)
             results.append(r)
-            auc_str = f"{r['auc']:.4f}" if isinstance(r["auc"], float) and not np.isnan(r["auc"]) else str(r["auc"])
+            auc_str = (
+                f"{r['auc']:.4f}"
+                if isinstance(r["auc"], float) and not np.isnan(r["auc"])
+                else str(r["auc"])
+            )
             print(f"AUC={auc_str}  ({r['status']})  fit={r['fit_time']}s")
         except Exception as e:
             print(f"FAILED: {e}")
-            results.append({
-                "dataset": name,
-                "n_samples": "?",
-                "n_features": "?",
-                "anomaly_rate": "?",
-                "auc": float("nan"),
-                "fit_time": "?",
-                "score_time": "?",
-                "status": f"Exception: {e}",
-            })
+            results.append(
+                {
+                    "dataset": name,
+                    "n_samples": "?",
+                    "n_features": "?",
+                    "anomaly_rate": "?",
+                    "auc": float("nan"),
+                    "fit_time": "?",
+                    "score_time": "?",
+                    "status": f"Exception: {e}",
+                }
+            )
 
     print()
     print_table(results)

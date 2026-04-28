@@ -17,7 +17,9 @@ class GalaxyADBench:
         self.config = config or GalaxyConfig()
         self._galaxy = Galaxy(self.config)
 
-    def fit(self, X_train: np.ndarray, y_train: np.ndarray | None = None) -> GalaxyADBench:
+    def fit(
+        self, X_train: np.ndarray, y_train: np.ndarray | None = None
+    ) -> GalaxyADBench:
         self._galaxy.fit(X_train, y_train)
         return self
 
