@@ -27,4 +27,7 @@ class GalaxyADBench:
         return self._galaxy.predict_score(X)
 
     def predict(self, X: np.ndarray) -> np.ndarray:
-        return self._galaxy.predict(X)
+        """Return binary anomaly labels (0=normal, 1=anomaly) via outlier_ratio threshold."""
+        scores = self._galaxy.predict_score(X)
+        threshold = np.quantile(scores, 1.0 - self.config.outlier_ratio)
+        return (scores > threshold).astype(np.int32)

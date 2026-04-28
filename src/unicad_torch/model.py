@@ -69,18 +69,5 @@ def pretrain_autoencoder(
             optimizer.step()
         scheduler.step()
 
+    model.eval()
     return model
-
-
-def estimate_alpha(
-    features: torch.Tensor, cluster_centers: torch.Tensor, std: int = 3
-) -> torch.Tensor:
-    """Compute distance thresholds for each cluster center."""
-    dists = torch.pairwise_distance(
-        features.unsqueeze(1), cluster_centers.unsqueeze(0), p=2
-    )
-    log_dists = torch.log(dists)
-    mean = torch.mean(log_dists, dim=0)
-    std_val = torch.std(log_dists, dim=0)
-    alpha = torch.exp(mean - std_val * std)
-    return alpha.detach()

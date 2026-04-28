@@ -34,7 +34,7 @@ def _kmeans_pp_init(
     Args:
         Z: (N, D) data on any device.
         K: number of centres.
-        generator: CPU generator for reproducibility.
+        generator: torch Generator for reproducibility (must match Z.device for CUDA).
 
     Returns:
         (K, D) initial centres on Z's device.
@@ -43,14 +43,14 @@ def _kmeans_pp_init(
     device = Z.device
 
     # K-means++ seeding
-    idx = torch.randint(N, (1,), generator=generator).item()
+    idx = torch.rand(1, generator=generator, device=device).item() * N
     centres = [Z[int(idx)]]
 
     for _ in range(K - 1):
         dists = torch.cdist(Z, torch.stack(centres))  # (N, current_k)
         min_dists_sq = dists.min(dim=1).values ** 2  # (N,)
         probs = min_dists_sq / min_dists_sq.sum().clamp(min=1e-30)
-        idx = torch.multinomial(probs, 1, generator=generator).item()
+        idx = torch.multinomial(probs, 1, generator=generator).to(device).item()
         centres.append(Z[int(idx)])
 
     means = torch.stack(centres).to(device)  # (K, D)
@@ -115,7 +115,10 @@ class SMMTorch:
         device = Z.device
         dtype = Z.dtype
 
-        generator = torch.Generator()
+        if device.type == "cuda":
+            generator = torch.Generator(device=device)
+        else:
+            generator = torch.Generator()
         generator.manual_seed(self.random_state)
 
         # --- Initialise with k-means++ ---
@@ -168,16 +171,19 @@ class SMMTorch:
             # Reinitialise degenerate components
             empty = nk < 1.0
             if empty.any():
-                n_empty = empty.sum()
-                new_idx = torch.randperm(N, generator=generator)[:n_empty]
+                n_empty = int(empty.sum())
+                perm = torch.rand(N, generator=generator, device=device).argsort()
+                new_idx = perm[:n_empty]
                 means[empty] = Z[new_idx]
                 covars[empty] = data_var[:n_empty].clamp(min=_VAR_FLOOR)
                 weights[empty] = 1.0 / K
                 weights = weights / weights.sum()
 
-            # Convergence check
+            # Convergence check (relative tolerance)
             ll = log_norm.sum().item()
-            if prev_ll is not None and abs(ll - prev_ll) < self.tol:
+            if prev_ll is not None and abs(ll - prev_ll) < self.tol * max(
+                abs(prev_ll), 1.0
+            ):
                 break
             prev_ll = ll
 

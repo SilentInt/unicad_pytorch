@@ -18,12 +18,14 @@ class StandardScaler:
 
     def fit(self, X: torch.Tensor) -> StandardScaler:
         self.mean_ = X.mean(dim=0)
-        self.std_ = X.std(dim=0).clamp(min=1e-8)
+        self.std_ = X.std(dim=0, correction=0).clamp(min=1e-8)
         return self
 
     def transform(self, X: torch.Tensor) -> torch.Tensor:
-        assert self.mean_ is not None
-        assert self.std_ is not None
+        if self.mean_ is None:
+            raise RuntimeError("Scaler not fitted — call fit() first")
+        if self.std_ is None:
+            raise RuntimeError("Scaler not fitted — call fit() first")
         return (X - self.mean_) / self.std_
 
     def fit_transform(self, X: torch.Tensor) -> torch.Tensor:

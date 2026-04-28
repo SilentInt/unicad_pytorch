@@ -58,10 +58,20 @@ class GalaxyEM:
         """Re-score the FULL X, then filter top outlier_ratio% out."""
         with torch.no_grad():
             Z = self.model.encoder(X)
-        assert self.means is not None
-        assert self.covars is not None
+        if self.means is None:
+            raise RuntimeError(
+                "Prototypes not initialized — call update_prototypes first"
+            )
+        if self.covars is None:
+            raise RuntimeError(
+                "Prototypes not initialized — call update_prototypes first"
+            )
         score = self.scorer.get_score(
-            Z, self.means, covars=self.covars, score_type=self.config.score_type
+            Z,
+            self.means,
+            covars=self.covars,
+            weights=self.weights,
+            score_type=self.config.score_type,
         )
 
         if torch.isnan(score).any() or torch.isinf(score).any():
@@ -81,14 +91,18 @@ class GalaxyEM:
             Z = self.model.encoder(X)
 
         if torch.isnan(Z).any() or torch.isinf(Z).any():
-            warnings.warn("Encoder output contains NaN/Inf — skipping prototype update")
-            return
+            raise RuntimeError(
+                "Encoder output contains NaN/Inf — cannot update prototypes"
+            )
 
         self.smm.fit(Z)
 
-        assert self.smm.means_ is not None
-        assert self.smm.weights_ is not None
-        assert self.smm.covars_ is not None
+        if self.smm.means_ is None:
+            raise RuntimeError("SMM fit failed — means_ is None")
+        if self.smm.weights_ is None:
+            raise RuntimeError("SMM fit failed — weights_ is None")
+        if self.smm.covars_ is None:
+            raise RuntimeError("SMM fit failed — covars_ is None")
 
         self.means = self.smm.means_.detach().to(torch.float32)
         self.weights = self.smm.weights_.detach().to(torch.float32)
@@ -100,9 +114,18 @@ class GalaxyEM:
             self.model.parameters(), lr=self.config.em_finetune_lr
         )
 
-        assert self.means is not None
-        assert self.weights is not None
-        assert self.covars is not None
+        if self.means is None:
+            raise RuntimeError(
+                "Prototypes not initialized — call update_prototypes first"
+            )
+        if self.weights is None:
+            raise RuntimeError(
+                "Prototypes not initialized — call update_prototypes first"
+            )
+        if self.covars is None:
+            raise RuntimeError(
+                "Prototypes not initialized — call update_prototypes first"
+            )
 
         # Pre-compute log|Σ_k| = Σ_d log(σ_kd) — stays finite in any dimension
         log_det_covars = torch.log(self.covars.clamp(min=_VAR_FLOOR)).sum(dim=1)  # (K,)

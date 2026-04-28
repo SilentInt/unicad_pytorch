@@ -12,6 +12,8 @@ Numpy conversion only at the public API boundary (fit/predict_score).
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import torch
 
@@ -36,6 +38,11 @@ class Galaxy:
         _ = y_train  # unsupervised -- labels ignored
 
         device = self.config.device
+        if X_train.dtype != np.float32:
+            warnings.warn(
+                f"Input dtype is {X_train.dtype}, converting to float32 — precision may be lost",
+                stacklevel=2,
+            )
         X_tensor = torch.from_numpy(X_train).to(torch.float32).to(device)
 
         # Stage 1: Preprocessing (on device)
@@ -63,19 +70,29 @@ class Galaxy:
         self.em = GalaxyEM(self.model, self.config)
         self.em.fit(X_tensor)
 
+        self.model.eval()
         return self
 
     def predict_score(self, X: np.ndarray) -> np.ndarray:
         device = self.config.device
+        if X.dtype != np.float32:
+            warnings.warn(
+                f"Input dtype is {X.dtype}, converting to float32 — precision may be lost",
+                stacklevel=2,
+            )
         X_tensor = torch.from_numpy(X).to(torch.float32).to(device)
 
         if self.scaler is not None:
             X_tensor = self.scaler.transform(X_tensor)
 
-        assert self.model is not None
-        assert self.em is not None
-        assert self.em.means is not None
+        if self.model is None:
+            raise RuntimeError("Model not initialized — call fit() first")
+        if self.em is None:
+            raise RuntimeError("EM not initialized — call fit() first")
+        if self.em.means is None:
+            raise RuntimeError("Prototypes not initialized — call fit() first")
 
+        self.model.eval()
         with torch.no_grad():
             Z = self.model.encoder(X_tensor)
 
