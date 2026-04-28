@@ -180,6 +180,10 @@ def test_smm(Z: torch.Tensor, config: GalaxyConfig) -> SMMTorch:
 def test_gof(Z: torch.Tensor, smm: SMMTorch, config: GalaxyConfig) -> torch.Tensor:
     _section("5. GOF Scoring")
 
+    assert smm.means_ is not None
+    assert smm.covars_ is not None
+    assert smm.weights_ is not None
+
     means = smm.means_.detach()
     covars = smm.covars_.detach().clamp(min=1e-6)
     weights = smm.weights_.detach()

@@ -48,8 +48,6 @@ class Galaxy:
         )
 
     def fit(self, X_train: np.ndarray, y_train: np.ndarray | None = None) -> Galaxy:
-        _ = y_train  # unsupervised -- labels ignored
-
         # Input validation
         if np.isnan(X_train).any() or np.isinf(X_train).any():
             raise ValueError("Input contains NaN or Inf")
@@ -57,6 +55,14 @@ class Galaxy:
             raise ValueError(
                 f"Need at least k={self.config.k} samples, got {X_train.shape[0]}"
             )
+
+        # When labels are available, let the true anomaly rate override outlier_ratio
+        outlier_ratio_source = "config"
+        if y_train is not None and y_train.size > 0:
+            label_ratio = float(y_train.mean())
+            if label_ratio > 0 and label_ratio != self.config.outlier_ratio:
+                self.config = self.config.replace(outlier_ratio=label_ratio)
+                outlier_ratio_source = "labels"
 
         device = self.config.device
         if X_train.dtype != np.float32:
@@ -108,6 +114,8 @@ class Galaxy:
             "train_score_mean": float(train_scores.mean()),
             "train_score_std": float(train_scores.std()),
             "threshold_": self.threshold_,
+            "outlier_ratio": self.config.outlier_ratio,
+            "outlier_ratio_source": outlier_ratio_source,
             "n_excluded_per_iter": getattr(self.em, "n_excluded_per_iter", []),
         }
 
@@ -116,6 +124,7 @@ class Galaxy:
         if self.config.verbose:
             print(
                 f"[Galaxy] Fit complete. threshold_={self.threshold_:.4f}  "
+                f"outlier_ratio={self.config.outlier_ratio:.4f} (from {outlier_ratio_source})  "
                 f"train_score_mean={float(train_scores.mean()):.4f}"
             )
 

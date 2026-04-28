@@ -52,18 +52,24 @@ uv run python scripts/download_data.py --category Classical
 # Run benchmarks
 uv run python scripts/run_benchmark.py --data-dir data/Classical
 uv run python scripts/run_benchmark.py --datasets 38_thyroid --verbose
+
+# Anomaly detection (load model → score → evaluate)
+uv run python scripts/predict.py --model galaxy.pt --data data/Classical/38_thyroid.npz
+uv run python scripts/predict.py --model galaxy.pt --data-dir data/Classical
+uv run python scripts/predict.py --model galaxy.pt --data test.csv --labels
+uv run python scripts/predict.py --model galaxy.pt --data test.csv --output-scores scores.csv
 ```
 
 ## Public API
 
 **`Galaxy`** (`galaxy.py`) — main model class:
-- `fit(X_train, y_train=None)` — train the four-stage pipeline; `y_train` is ignored (unsupervised)
+- `fit(X_train, y_train=None)` — train the four-stage pipeline; when `y_train` is provided, the true anomaly rate overrides `outlier_ratio` for EM exclusion and threshold computation
 - `predict_score(X)` — return continuous anomaly scores (`np.float32`)
 - `predict(X)` — return binary 0/1 labels using `threshold_` from training (`np.int32`)
 - `fit_predict(X_train, y_train=None)` — fit then return training scores
 - `save(path)` / `Galaxy.load(path, device="cpu")` — persist/restore all fitted state
 - `threshold_` — absolute anomaly threshold (99th percentile of training scores by default)
-- `fit_info_` — dict with `train_score_mean`, `train_score_std`, `threshold_`, `n_excluded_per_iter`
+- `fit_info_` — dict with `train_score_mean`, `train_score_std`, `threshold_`, `outlier_ratio`, `outlier_ratio_source` ("labels" or "config"), `n_excluded_per_iter`
 - `input_dim` — number of features from training data
 - `__repr__` — shows `Galaxy(not fitted)` or `Galaxy(input_dim=..., k=..., threshold_=...)`
 
@@ -98,6 +104,7 @@ Four-stage pipeline orchestrated by `Galaxy`:
 - **Full-dataset re-scoring**: EM exclude step always re-scores the full X, not the filtered subset.
 - **Gravity version + score type**: Default is `vector`/`vector` (matched pair). Scalar gravity with vector scoring is a mismatch that wastes training effect.
 - **Absolute threshold**: `predict()` uses `threshold_` learned from training scores (quantile `1 - outlier_ratio`), not relative to the test batch.
+- **Label-informed outlier ratio**: When `y_train` is provided to `fit()`, the true anomaly rate (`y_train.mean()`) overrides `config.outlier_ratio` for EM exclusion and threshold computation. Stored in `fit_info_["outlier_ratio_source"]` as "labels" or "config".
 - **Input requirements**: float32 preferred (float64 triggers warning); no NaN/Inf; minimum `k` samples.
 
 ## GalaxyConfig Fields
@@ -106,7 +113,7 @@ Four-stage pipeline orchestrated by `Galaxy`:
 |---|---|---|---|
 | `seed` | int | 42 | Random seed |
 | `k` | int | 10 | Number of clusters |
-| `outlier_ratio` | float | 0.01 | Expected anomaly fraction, in [0, 1) |
+| `outlier_ratio` | float | 0.01 | Expected anomaly fraction, in [0, 1); overridden by `y_train.mean()` when labels provided |
 | `hidden_dim` | int | 128 | Autoencoder hidden/latent dimension |
 | `pretrain_epochs` | int | 200 | AE pretraining epochs |
 | `pretrain_lr` | float | 3e-3 | AE learning rate |
