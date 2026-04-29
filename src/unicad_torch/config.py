@@ -3,33 +3,60 @@ from __future__ import annotations
 import dataclasses
 import warnings
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import torch
+
+if TYPE_CHECKING:
+    from unicad_torch.callbacks import Callback
 
 
 @dataclass
 class GalaxyConfig:
-    """Single source of truth for all Galaxy hyperparameters with paper defaults."""
+    """Single source of truth for all Galaxy hyperparameters with paper defaults.
 
+    Field groups:
+        General:       seed, k, outlier_ratio (default only; may be overridden by
+                       labels at fit time), preprocess, device, verbose
+        Autoencoder:   hidden_dim, latent_dim, pretrain (on/off switch),
+                       pretrain_epochs, pretrain_lr, pretrain_batch_size
+        EM:            em_iters, em_finetune_steps, em_finetune_lr
+        SMM:           smm_n_iter, smm_tol
+        Scoring:       gravity_version, score_type
+        Callbacks:     callbacks
+    """
+
+    # General
     seed: int = 42
     k: int = 10
     outlier_ratio: float = 0.01
+    preprocess: str = "z-score"
+    device: str = "cpu"
+    verbose: bool = False
+
+    # Autoencoder
     hidden_dim: int = 128
     latent_dim: int | None = None
+    pretrain: bool = True
     pretrain_epochs: int = 200
     pretrain_lr: float = 3e-3
     pretrain_batch_size: int = 1024
+
+    # EM
     em_iters: int = 3
     em_finetune_steps: int = 100
     em_finetune_lr: float = 3e-4
-    preprocess: str = "z-score"
-    gravity_version: str = "vector"
-    score_type: str = "vector"
-    pretrain: bool = True
+
+    # SMM
     smm_n_iter: int = 100
     smm_tol: float = 1e-3
-    device: str = "cpu"
-    verbose: bool = False
+
+    # Scoring
+    gravity_version: str = "vector"
+    score_type: str = "vector"
+
+    # Callbacks
+    callbacks: list[Callback] | None = None
 
     def __post_init__(self) -> None:
         if self.preprocess not in {"z-score", "row-norm", "none"}:
@@ -76,6 +103,10 @@ class GalaxyConfig:
             raise ValueError(f"em_finetune_lr must be > 0, got {self.em_finetune_lr}")
         if self.smm_tol <= 0:
             raise ValueError(f"smm_tol must be > 0, got {self.smm_tol}")
+        if self.callbacks is not None and not isinstance(self.callbacks, list):
+            raise ValueError(
+                f"callbacks must be a list or None, got {type(self.callbacks).__name__}"
+            )
         # Validate device string
         try:
             torch.device(self.device)
@@ -88,6 +119,11 @@ class GalaxyConfig:
                 "training effect will be wasted. Consider matching them.",
                 stacklevel=2,
             )
+
+    @property
+    def resolved_latent_dim(self) -> int:
+        """Effective latent dimension: ``latent_dim`` if set, else ``hidden_dim``."""
+        return self.latent_dim if self.latent_dim is not None else self.hidden_dim
 
     def replace(self, **overrides: object) -> GalaxyConfig:
         """Return a new GalaxyConfig with specified fields overridden."""

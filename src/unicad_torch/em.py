@@ -11,8 +11,9 @@ underflow/overflow from high-dimensional determinant products.
 
 from __future__ import annotations
 
+import logging
 import warnings
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import torch
 import torch.nn.functional as F
@@ -26,6 +27,11 @@ from unicad_torch.gravity import (
 )
 from unicad_torch.model import Autoencoder
 from unicad_torch.smm_torch import SMMTorch
+
+if TYPE_CHECKING:
+    from unicad_torch.callbacks import CallbackManager, FitContext
+
+logger = logging.getLogger("unicad_torch.em")
 
 
 class GalaxyEM:
@@ -69,10 +75,20 @@ class GalaxyEM:
         else:
             raise ValueError(f"Unknown gravity_version: {config.gravity_version}")
 
-        self.means: torch.Tensor | None = None
-        self.weights: torch.Tensor | None = None
-        self.covars: torch.Tensor | None = None
+        # Fitted attributes (sklearn trailing-_ convention)
+        self.means_: torch.Tensor | None = None
+        self.weights_: torch.Tensor | None = None
+        self.covars_: torch.Tensor | None = None
         self.n_excluded_per_iter: list[int] = []
+
+    def _check_prototypes(self) -> None:
+        """Raise RuntimeError if prototypes are not initialized."""
+        if self.means_ is None:
+            raise RuntimeError("Prototypes not initialized — call fit() first")
+        if self.covars_ is None:
+            raise RuntimeError("Prototypes not initialized — call fit() first")
+        if self.weights_ is None:
+            raise RuntimeError("Prototypes not initialized — call fit() first")
 
     def load_state(
         self,
@@ -82,58 +98,93 @@ class GalaxyEM:
         n_excluded_per_iter: list[int] | None = None,
     ) -> None:
         """Restore fitted prototype state (used by Galaxy.load)."""
-        self.means = means
-        self.weights = weights
-        self.covars = covars
+        self.means_ = means
+        self.weights_ = weights
+        self.covars_ = covars
         self.n_excluded_per_iter = n_excluded_per_iter or []
 
     def score(self, X_tensor: torch.Tensor) -> torch.Tensor:
         """Score data using current prototypes and model encoder."""
-        if self.means is None or self.covars is None or self.weights is None:
-            raise RuntimeError("Prototypes not initialized — call fit() first")
+        self._check_prototypes()
+        assert self.means_ is not None
+        assert self.covars_ is not None
+        assert self.weights_ is not None
         self.model.eval()
         with torch.no_grad():
             Z = self.model.encoder(X_tensor)
         return gof_score(
-            Z, self.means, self.covars, self.weights, self.config.score_type
+            Z, self.means_, self.covars_, self.weights_, self.config.score_type
         )
 
-    def fit(self, X: torch.Tensor) -> GalaxyEM:
+    def fit(
+        self,
+        X: torch.Tensor,
+        callbacks: CallbackManager | None = None,
+        ctx: FitContext | None = None,
+    ) -> GalaxyEM:
         # Initial encode of full X
         with torch.no_grad():
             Z = self.model.encoder(X)
-        self.update_prototypes(X, Z)
+        self._update_prototypes(X, Z)
 
         n_excluded_per_iter: list[int] = []
         for _iter in range(self.config.em_iters):
+            # --- callback: EM iter begin ---
+            if ctx is not None:
+                ctx.stage = "em"
+                ctx.em_iter = _iter
+                ctx.total_em_iters = self.config.em_iters
+            if callbacks is not None and ctx is not None:
+                callbacks.fire("on_em_iter_begin", ctx)
+
             X_filtered, Z_filtered, n_excluded = self._exclude_outlier_set(X, Z)
             n_excluded_per_iter.append(n_excluded)
-            self.update_network(X_filtered)
-            self.update_prototypes(X_filtered, Z_filtered)
+            self._update_network(X_filtered, callbacks=callbacks, ctx=ctx)
+            self._update_prototypes(X_filtered, Z_filtered)
 
             # Re-encode full X for next iteration's outlier exclusion
-            # (encoder has changed during update_network)
+            # (encoder has changed during _update_network)
             with torch.no_grad():
                 Z = self.model.encoder(X)
 
-            if self.config.verbose:
-                if (
-                    self.means is not None
-                    and self.covars is not None
-                    and self.weights is not None
-                ):
-                    score = gof_score(
-                        Z,
-                        self.means,
-                        self.covars,
-                        self.weights,
-                        self.config.score_type,
-                    )
-                    print(
-                        f"  [EM iter {_iter + 1}/{self.config.em_iters}]  "
-                        f"excluded={n_excluded}  "
-                        f"score=[{score.min():.2f}, {score.max():.2f}]"
-                    )
+            # Compute per-iter metrics for callbacks and logging
+            score_min: float | None = None
+            score_max: float | None = None
+            score_mean: float | None = None
+            if (
+                self.means_ is not None
+                and self.covars_ is not None
+                and self.weights_ is not None
+            ):
+                score = gof_score(
+                    Z, self.means_, self.covars_, self.weights_, self.config.score_type
+                )
+                score_min = score.min().item()
+                score_max = score.max().item()
+                score_mean = score.mean().item()
+
+            # --- callback: EM iter end ---
+            if ctx is not None:
+                ctx.n_excluded = n_excluded
+                ctx.score_min = score_min
+                ctx.score_max = score_max
+                ctx.score_mean = score_mean
+            if callbacks is not None and ctx is not None:
+                callbacks.fire("on_em_iter_end", ctx)
+
+            logger.info(
+                "[EM] iter %d/%d  excluded=%d  score=[%.2f, %.2f]  mean=%.2f",
+                _iter + 1,
+                self.config.em_iters,
+                n_excluded,
+                score_min or 0.0,
+                score_max or 0.0,
+                score_mean or 0.0,
+            )
+
+            if ctx is not None and ctx.stop_training:
+                logger.info("EM stopped early at iter %d", _iter + 1)
+                break
 
         self.n_excluded_per_iter = n_excluded_per_iter
         return self
@@ -153,20 +204,12 @@ class GalaxyEM:
             with torch.no_grad():
                 Z = self.model.encoder(X)
         assert Z is not None
-        if self.means is None:
-            raise RuntimeError(
-                "Prototypes not initialized — call update_prototypes first"
-            )
-        if self.covars is None:
-            raise RuntimeError(
-                "Prototypes not initialized — call update_prototypes first"
-            )
-        if self.weights is None:
-            raise RuntimeError(
-                "Prototypes not initialized — call update_prototypes first"
-            )
+        self._check_prototypes()
+        assert self.means_ is not None
+        assert self.covars_ is not None
+        assert self.weights_ is not None
         score = gof_score(
-            Z, self.means, self.covars, self.weights, self.config.score_type
+            Z, self.means_, self.covars_, self.weights_, self.config.score_type
         )
 
         if torch.isnan(score).any() or torch.isinf(score).any():
@@ -183,7 +226,7 @@ class GalaxyEM:
             return X, Z, n_excluded
         return X_filtered, Z_filtered, n_excluded
 
-    def update_prototypes(
+    def _update_prototypes(
         self, X: torch.Tensor, Z: torch.Tensor | None = None
     ) -> torch.Tensor:
         """Fit SMM on encoded X. Returns Z (encoded embeddings).
@@ -215,49 +258,61 @@ class GalaxyEM:
         if smm.covars_ is None:
             raise RuntimeError("SMM fit failed — covars_ is None")
 
-        self.means = smm.means_.detach().to(torch.float32)
-        self.weights = smm.weights_.detach().to(torch.float32)
-        self.covars = smm.covars_.detach().to(torch.float32)
+        self.means_ = smm.means_.detach().to(torch.float32)
+        self.weights_ = smm.weights_.detach().to(torch.float32)
+        self.covars_ = smm.covars_.detach().to(torch.float32)
 
         return Z
 
-    def update_network(self, X: torch.Tensor) -> None:
+    def _update_network(
+        self,
+        X: torch.Tensor,
+        callbacks: CallbackManager | None = None,
+        ctx: FitContext | None = None,
+    ) -> None:
         """Fine-tune autoencoder with reconstruction + gravity loss (log-space)."""
+        self._check_prototypes()
+        assert self.means_ is not None
+        assert self.covars_ is not None
+        assert self.weights_ is not None
+
         optimizer = torch.optim.Adam(
             self.model.parameters(), lr=self.config.em_finetune_lr
         )
 
-        if self.means is None:
-            raise RuntimeError(
-                "Prototypes not initialized — call update_prototypes first"
-            )
-        if self.weights is None:
-            raise RuntimeError(
-                "Prototypes not initialized — call update_prototypes first"
-            )
-        if self.covars is None:
-            raise RuntimeError(
-                "Prototypes not initialized — call update_prototypes first"
-            )
-
-        for _step in range(self.config.em_finetune_steps):
+        for step in range(self.config.em_finetune_steps):
             self.model.train()
             embed, x_hat = self.model(X)
 
             recon_loss = F.mse_loss(x_hat, X, reduction="sum")
 
             log_forces = compute_log_forces(
-                embed, self.means, self.covars, self.weights
+                embed, self.means_, self.covars_, self.weights_
             )
 
-            gravity_loss = self._compute_gravity_loss(log_forces, self.means, embed)
+            gravity_loss = self._compute_gravity_loss(log_forces, self.means_, embed)
 
             loss = recon_loss + gravity_loss
             if torch.isnan(loss) or torch.isinf(loss):
-                warnings.warn("NaN/Inf loss in update_network — stopping early")
+                warnings.warn("NaN/Inf loss in _update_network — stopping early")
                 break
 
             optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             optimizer.step()
+
+            # --- callback: finetune step end ---
+            if ctx is not None:
+                ctx.stage = "finetune"
+                ctx.finetune_step = step
+                ctx.total_finetune_steps = self.config.em_finetune_steps
+                ctx.finetune_recon_loss = recon_loss.item()
+                ctx.finetune_gravity_loss = gravity_loss.item()
+                ctx.finetune_total_loss = loss.item()
+            if callbacks is not None and ctx is not None:
+                callbacks.fire("on_finetune_step_end", ctx)
+
+            if ctx is not None and ctx.stop_training:
+                logger.info("Fine-tuning stopped early at step %d", step + 1)
+                break

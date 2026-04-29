@@ -23,7 +23,7 @@ class TestGalaxyFit:
         assert model.threshold_ is not None
         assert model.model is not None
         assert model.em is not None
-        assert model.em.means is not None
+        assert model.em.means_ is not None
 
     def test_nan_input_raises(self):
         X = np.array([[1, 2], [np.nan, 4]], dtype=np.float32)

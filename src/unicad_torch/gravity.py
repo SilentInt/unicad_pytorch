@@ -10,7 +10,12 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
+# Numerical floors — public constants imported by other modules
 VAR_FLOOR = 1e-6
+WEIGHT_FLOOR = 1e-30
+NORM_FLOOR = 1e-30
+
+# Pre-computed constants — private, used only within this module
 _LOG_PI = torch.log(torch.tensor(torch.pi))
 
 
@@ -54,10 +59,10 @@ def compute_log_forces(
     """
     maha = mahalanobis_diag(Z, means, covars)  # (N, K)
 
-    log_det_covars = torch.log(covars).sum(dim=1)  # (K,)
+    log_det_covars = torch.log(covars.clamp(min=VAR_FLOOR)).sum(dim=1)  # (K,)
 
     return (
-        torch.log(weights.clamp(min=1e-30))  # (1, K)
+        torch.log(weights.clamp(min=WEIGHT_FLOOR))  # (1, K)
         - _LOG_PI.to(dtype=Z.dtype, device=Z.device)
         - 0.5 * log_det_covars.unsqueeze(0)  # (1, K)
         - torch.log1p(maha)  # (N, K)
@@ -96,6 +101,6 @@ def aggregate_force_vector(
     delta = means.unsqueeze(0) - Z.unsqueeze(1)  # (N, K, D)
     unit_vec = F.normalize(delta, p=2, dim=-1)
     force_vec = (scaled.unsqueeze(2) * unit_vec).sum(dim=1)  # (N, D)
-    force_norm = torch.norm(force_vec, dim=-1).clamp(min=1e-30)  # (N,)
+    force_norm = torch.norm(force_vec, dim=-1).clamp(min=NORM_FLOOR)  # (N,)
     log_force_norm = torch.log(force_norm) + log_max.squeeze(1)
     return -log_force_norm

@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import logging
+from typing import TYPE_CHECKING
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
 from unicad_torch.config import GalaxyConfig
+
+if TYPE_CHECKING:
+    from unicad_torch.callbacks import CallbackManager, FitContext
+
+logger = logging.getLogger("unicad_torch.model")
 
 
 class Encoder(nn.Module):
@@ -48,8 +56,15 @@ def pretrain_autoencoder(
     model: Autoencoder,
     X: torch.Tensor,
     config: GalaxyConfig,
+    callbacks: CallbackManager | None = None,
+    ctx: FitContext | None = None,
 ) -> Autoencoder:
-    """Pretrain autoencoder with MSE(sum) loss, Adam + StepLR."""
+    """Pretrain autoencoder with MSE(sum) loss, Adam + StepLR.
+
+    If *callbacks* and *ctx* are provided, fires
+    ``on_pretrain_epoch_begin`` / ``on_pretrain_epoch_end`` at each
+    epoch boundary and checks ``ctx.stop_training``.
+    """
     model.to(config.device)
     model.train()
 
@@ -59,9 +74,15 @@ def pretrain_autoencoder(
     optimizer = torch.optim.Adam(model.parameters(), lr=config.pretrain_lr)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=0.1)
 
-    log_interval = max(1, config.pretrain_epochs // 10)
-
     for epoch in range(config.pretrain_epochs):
+        # --- callback: epoch begin ---
+        if ctx is not None:
+            ctx.epoch = epoch
+            ctx.stage = "pretrain"
+            ctx.total_epochs = config.pretrain_epochs
+        if callbacks is not None and ctx is not None:
+            callbacks.fire("on_pretrain_epoch_begin", ctx)
+
         epoch_loss = 0.0
         for (batch,) in loader:
             batch = batch.to(config.device)
@@ -73,13 +94,22 @@ def pretrain_autoencoder(
             epoch_loss += loss.item()
         scheduler.step()
 
-        if config.verbose and (
-            epoch % log_interval == 0 or epoch == config.pretrain_epochs - 1
-        ):
-            print(
-                f"  [Pretrain] epoch {epoch + 1}/{config.pretrain_epochs}  "
-                f"loss={epoch_loss:.4f}"
-            )
+        # --- callback: epoch end ---
+        if ctx is not None:
+            ctx.pretrain_loss = epoch_loss
+        if callbacks is not None and ctx is not None:
+            callbacks.fire("on_pretrain_epoch_end", ctx)
+
+        logger.info(
+            "[Pretrain] epoch %d/%d  loss=%.4f",
+            epoch + 1,
+            config.pretrain_epochs,
+            epoch_loss,
+        )
+
+        if ctx is not None and ctx.stop_training:
+            logger.info("Pretraining stopped early at epoch %d", epoch + 1)
+            break
 
     model.eval()
     return model
