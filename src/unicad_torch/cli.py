@@ -415,6 +415,30 @@ def train_main(argv: list[str] | None = None) -> None:
         print(f"  effective_outlier_ratio_={model.effective_outlier_ratio_:.4f}")
         print(f"  train_score_mean={model._train_score_mean:.4f}")
 
+    # Evaluate on training data when labels are available
+    eval_metrics: dict[str, Any] | None = None
+    if y is not None:
+        eval_result = _evaluate(model, X, y, model.threshold_, "training")
+        eval_metrics = {
+            k: v
+            for k, v in eval_result.items()
+            if k
+            in (
+                "auc_roc",
+                "auc_pr",
+                "f1",
+                "precision",
+                "recall",
+                "anomaly_rate",
+                "n_predicted_anomaly",
+                "pred_rate",
+            )
+        }
+        if not quiet and eval_metrics:
+            auc_str = f"{eval_metrics.get('auc_roc', float('nan')):.4f}"
+            f1_str = f"{eval_metrics.get('f1', float('nan')):.4f}"
+            print(f"  AUC-ROC={auc_str}  F1={f1_str}")
+
     # Save model
     output_path = args.output or str(run_dir / "model.pt")
     model.save(output_path)
@@ -442,6 +466,7 @@ def train_main(argv: list[str] | None = None) -> None:
         data_path=args.data,
         n_samples=X.shape[0],
         n_features=X.shape[1],
+        extra=eval_metrics,
     )
     if not quiet:
         print(f"Summary saved to {run_dir / 'summary.json'}")
@@ -469,7 +494,7 @@ def predict_parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Filter datasets by name (batch mode)",
     )
     parser.add_argument(
-        "--device", default="cpu", help="Device for inference (default: cpu)"
+        "--device", default=None, help="Device for inference (default: auto-detect)"
     )
     parser.add_argument(
         "--threshold", type=float, default=None, help="Override anomaly threshold"
@@ -732,7 +757,10 @@ def predict_main(argv: list[str] | None = None) -> None:
     args = predict_parse_args(argv)
 
     print(f"Loading model: {args.model}")
-    model = Galaxy.load(args.model, device=args.device)
+    device = args.device
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = Galaxy.load(args.model, device=device)
     print(f"  {model}")
     if args.threshold is None:
         print(f"  Training threshold: {model.threshold_:.4f}")

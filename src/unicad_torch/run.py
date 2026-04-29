@@ -118,6 +118,7 @@ def save_summary(
     data_path: str | None = None,
     n_samples: int | None = None,
     n_features: int | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> None:
     """Save run summary to ``{run_dir}/summary.json``."""
     summary: dict[str, Any] = {
@@ -148,6 +149,9 @@ def save_summary(
 
     summary.update(_get_git_info())
     summary["unicad_torch_version"] = _get_version()
+
+    if extra:
+        summary.update(extra)
 
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2))
 
