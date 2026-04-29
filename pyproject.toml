@@ -12,7 +12,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-cov", "ruff>=0.8", "pyright>=1.1", "mypy>=1.10", "pandas>=2.0", "tqdm>=4.60"]
+dev = ["pytest>=8.0", "pytest-cov", "ruff>=0.8", "pyright>=1.1", "mypy>=1.10", "pandas>=2.0", "tqdm>=4.60", "pyyaml>=6.0"]
+
+[project.scripts]
+galaxy-train = "unicad_torch.cli:train"
+galaxy-predict = "unicad_torch.cli:predict"
+galaxy-benchmark = "unicad_torch.cli:benchmark"
+galaxy-runs = "unicad_torch.cli:runs"
 
 [build-system]
 requires = ["hatchling"]

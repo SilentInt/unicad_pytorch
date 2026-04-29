@@ -27,7 +27,6 @@ from unicad_torch.gravity import mahalanobis_diag
 from unicad_torch.gof import gof_score
 from unicad_torch.em import GalaxyEM
 from unicad_torch.galaxy import Galaxy
-from unicad_torch.adapter import GalaxyADBench
 
 
 def _stats(arr: np.ndarray | torch.Tensor, name: str) -> str:
@@ -103,7 +102,7 @@ def test_autoencoder(
     model = Autoencoder(
         input_dim=input_dim,
         hidden_dim=config.hidden_dim,
-        latent_dim=config.hidden_dim,
+        latent_dim=config.resolved_latent_dim,
     ).to(config.device)
     n_params = sum(p.numel() for p in model.parameters())
     print(
@@ -242,13 +241,13 @@ def test_em(
 
     print(f"  EM fit time: {fit_time:.2f}s")
 
-    assert em.means is not None
-    assert em.covars is not None
-    assert em.weights is not None
+    assert em.means_ is not None
+    assert em.covars_ is not None
+    assert em.weights_ is not None
 
-    print(_stats(em.means, "em.means"))
-    print(_stats(em.covars, "em.covars"))
-    print(_stats(em.weights, "em.weights"))
+    print(_stats(em.means_, "em.means_"))
+    print(_stats(em.covars_, "em.covars_"))
+    print(_stats(em.weights_, "em.weights_"))
 
     # Score with EM results
     score = em.score(X_tensor)
@@ -298,22 +297,6 @@ def test_galaxy(X: np.ndarray, y: np.ndarray, config: GalaxyConfig) -> None:
             f"  Anomaly scores:  mean={s_anomaly.mean():.6g}  std={s_anomaly.std():.6g}  "
             f"min={s_anomaly.min():.6g}  max={s_anomaly.max():.6g}"
         )
-
-
-# ---------------------------------------------------------------------------
-# 8. ADBench adapter
-# ---------------------------------------------------------------------------
-def test_adapter(X: np.ndarray, y: np.ndarray, config: GalaxyConfig) -> None:
-    _section("8. ADBench Adapter")
-
-    model = GalaxyADBench(config)
-    model.fit(X, y)
-    scores = model.predict_score(X)
-    print(_stats(scores, "adapter_scores"))
-
-    if not np.isnan(scores).any() and not np.isinf(scores).any():
-        auc = roc_auc_score(y, scores)
-        print(f"  AUC-ROC: {auc:.4f}")
 
 
 # ---------------------------------------------------------------------------
@@ -378,9 +361,6 @@ def main() -> None:
 
         # 7. Full Galaxy
         test_galaxy(X, y, config)
-
-        # 8. Adapter
-        test_adapter(X, y, config)
 
     print(f"\n{'#' * 70}")
     print("#  All tests complete.")

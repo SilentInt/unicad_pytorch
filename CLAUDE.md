@@ -58,15 +58,29 @@ uv run pyright src/ tests/
 # Download ADBench datasets
 uv run python scripts/download_data.py --category Classical
 
+# Train (new)
+uv run python scripts/train.py --data data/Classical/38_thyroid.npz --output galaxy.pt
+uv run python scripts/train.py --data data/Classical/38_thyroid.npz --output galaxy.pt \
+    --tqdm --history --early-stopping --checkpoint
+
 # Run benchmarks
 uv run python scripts/run_benchmark.py --data-dir data/Classical
 uv run python scripts/run_benchmark.py --datasets 38_thyroid --verbose
+uv run python scripts/run_benchmark.py --datasets 38_thyroid --tqdm --history
 
 # Anomaly detection (load model → score → evaluate)
 uv run python scripts/predict.py --model galaxy.pt --data data/Classical/38_thyroid.npz
 uv run python scripts/predict.py --model galaxy.pt --data-dir data/Classical
 uv run python scripts/predict.py --model galaxy.pt --data test.csv --labels
 uv run python scripts/predict.py --model galaxy.pt --data test.csv --output-scores scores.csv
+
+# Installed CLI entry points (after uv sync)
+galaxy-train --data data/Classical/38_thyroid.npz --output galaxy.pt
+galaxy-predict --model galaxy.pt --data data/Classical/38_thyroid.npz
+galaxy-benchmark --datasets 38_thyroid --verbose
+galaxy-runs                                          # list past training runs
+galaxy-runs --detail 2026-04-29_14-30-22            # inspect a run
+galaxy-runs --compare run1 run2                     # compare runs
 ```
 
 ## Public API
@@ -113,6 +127,8 @@ Four-stage pipeline orchestrated by `Galaxy`, with callbacks firing at epoch/ite
 **Supporting modules**:
 - `config.py`: `GalaxyConfig` dataclass — hyperparameters with validation, device check, mismatch warning; `resolved_latent_dim` property
 - `callbacks.py`: Callback base class, `FitContext`, `CallbackManager`, and built-in callbacks
+- `cli.py`: CLI entry points and shared command utilities (`load_data`, `build_callbacks`, `add_config_args`, `add_callback_args`, `build_config_overrides`, `train_main`, `predict_main`, `benchmark_main`). Scripts are thin wrappers that import from this module.
+- `run.py`: Training run directory management — pure function module for organizing training runs into timestamped directories. Exports `generate_run_name`, `create_run_dir`, `save_config`, `save_history`, `save_summary`, `resolve_resume_path`, `find_runs`, `load_summary`. Used by `cli.py` for `galaxy-train` (auto-creates run dirs, saves config/history/summary) and `galaxy-runs` (lists/inspects past runs). `save_config` falls back to JSON if PyYAML unavailable. `resolve_resume_path` supports both `.pt` files and run directories (looks for `checkpoints/latest.pt` then `model.pt`).
 - `smm_torch.py`: `SMMTorch` — GPU-native Student-t Mixture Model (ν=1); device-aware Generator; relative tolerance convergence
 - `datasets.py`: `find_datasets()` — shared dataset discovery for scripts
 
@@ -140,6 +156,8 @@ Four-stage pipeline orchestrated by `Galaxy`, with callbacks firing at epoch/ite
 - **Reproducibility**: `Galaxy.fit()` calls `torch.manual_seed(config.seed)` at the start, covering model initialization and DataLoader shuffle.
 - **Input requirements**: float32 preferred (float64 triggers warning); no NaN/Inf; minimum `k` samples.
 - **resolved_latent_dim**: `GalaxyConfig.resolved_latent_dim` property returns `latent_dim` if set, else `hidden_dim`. Used by `Galaxy.fit()` and `Galaxy.load()` to avoid duplication.
+- **Run directory management**: `run.py` is a pure function module (no class). `train_main()` creates a run dir, saves config before training, then saves model/history/summary after training. ModelCheckpoint auto-wires `dirpath` to `{run_dir}/checkpoints/` when user hasn't explicitly set `--checkpoint-dir` (sentinel: `dirpath == "checkpoints/"`). `--output` is optional — if omitted, model is saved to `{run_dir}/model.pt`.
+- **Resume from run directory**: `resolve_resume_path()` handles both `.pt` files (direct) and directories (fallback chain: `checkpoints/latest.pt` → `model.pt` → FileNotFoundError).
 
 ## GalaxyConfig Fields
 
