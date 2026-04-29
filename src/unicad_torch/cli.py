@@ -296,7 +296,7 @@ def build_config_overrides(
 # ---------------------------------------------------------------------------
 
 
-def save_csv(results: list[dict[str, Any]], path: str) -> None:
+def save_csv(results: list[dict[str, Any]], path: str, *, quiet: bool = False) -> None:
     """Save a list of result dicts to CSV."""
     if not results:
         return
@@ -305,7 +305,8 @@ def save_csv(results: list[dict[str, Any]], path: str) -> None:
         writer = csv.DictWriter(f, fieldnames=cols)
         writer.writeheader()
         writer.writerows(results)
-    print(f"Results saved to {path}")
+    if not quiet:
+        print(f"Results saved to {path}")
 
 
 def print_history(history: dict[str, list[float]]) -> None:
@@ -1040,11 +1041,13 @@ def benchmark_main(argv: list[str] | None = None) -> None:
         print()
         _benchmark_print_table(results)
 
-    # Save results to run directory (and optional --output path)
-    results_path = str(run_dir / "results.csv")
-    save_csv(results, results_path)
-    if args.output and args.output != results_path:
-        save_csv(results, args.output)
+    # Save results
+    results_path = args.output or str(run_dir / "results.csv")
+    save_csv(results, results_path, quiet=quiet)
+    # Also save a copy to run dir if --output points elsewhere
+    run_results = str(run_dir / "results.csv")
+    if results_path != run_results:
+        save_csv(results, run_results, quiet=True)
 
     # Save summary
     valid_aucs = [
@@ -1060,7 +1063,6 @@ def benchmark_main(argv: list[str] | None = None) -> None:
         cli_args=sys.argv,
     )
     if not quiet:
-        print(f"Results saved to {results_path}")
         print(f"Summary saved to {run_dir / 'summary.json'}")
 
 
