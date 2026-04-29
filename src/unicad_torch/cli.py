@@ -23,6 +23,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import torch
+
 import numpy as np
 
 from unicad_torch import Galaxy, GalaxyConfig
@@ -91,13 +93,16 @@ def load_config_file(path: str) -> dict[str, Any]:
 def build_callbacks(args: argparse.Namespace, run_dir: Path | None = None) -> list:
     """Build callback list from CLI flags (shared by train and benchmark).
 
-    If *run_dir* is provided and ``--checkpoint`` is used without an
-    explicit ``--checkpoint-dir``, the checkpoint directory is auto-wired
-    to ``{run_dir}/checkpoints/``.
+    History, Checkpoint, and TqdmProgress are enabled by default.
+    Pass ``--no-history``, ``--no-checkpoint``, or ``--no-tqdm`` to disable.
+    If *run_dir* is provided and Checkpoint is used without an explicit
+    ``--checkpoint-dir``, the checkpoint directory is auto-wired to
+    ``{run_dir}/checkpoints/``.
     """
     callbacks: list = []
 
-    if args.history:
+    # History: default on, --no-history to disable
+    if not getattr(args, "no_history", False):
         callbacks.append(History())
 
     if args.early_stopping:
@@ -108,9 +113,10 @@ def build_callbacks(args: argparse.Namespace, run_dir: Path | None = None) -> li
             )
         )
 
-    if args.checkpoint:
+    # Checkpoint: default on when run_dir exists, --no-checkpoint to disable
+    if not getattr(args, "no_checkpoint", False) and run_dir is not None:
         dirpath = args.checkpoint_dir
-        if dirpath == "checkpoints/" and run_dir is not None:
+        if dirpath == "checkpoints/":
             dirpath = str(run_dir / "checkpoints")
 
         callbacks.append(
@@ -122,7 +128,8 @@ def build_callbacks(args: argparse.Namespace, run_dir: Path | None = None) -> li
             )
         )
 
-    if args.tqdm:
+    # TqdmProgress: default on, --no-tqdm to disable
+    if not getattr(args, "no_tqdm", False):
         callbacks.append(TqdmProgress())
 
     return callbacks
@@ -175,9 +182,15 @@ def add_run_args(parser: argparse.ArgumentParser) -> None:
 def add_callback_args(parser: argparse.ArgumentParser) -> None:
     """Add callback-related arguments to an argument parser."""
     parser.add_argument(
-        "--history", action="store_true", help="Record training history"
+        "--no-history",
+        action="store_true",
+        help="Disable training history recording (enabled by default)",
     )
-    parser.add_argument("--tqdm", action="store_true", help="Show tqdm progress bars")
+    parser.add_argument(
+        "--no-tqdm",
+        action="store_true",
+        help="Disable tqdm progress bars (enabled by default)",
+    )
     parser.add_argument(
         "--early-stopping", action="store_true", help="Enable early stopping"
     )
@@ -193,7 +206,9 @@ def add_callback_args(parser: argparse.ArgumentParser) -> None:
         help="EarlyStopping monitor metric (default: pretrain_loss)",
     )
     parser.add_argument(
-        "--checkpoint", action="store_true", help="Save model checkpoints"
+        "--no-checkpoint",
+        action="store_true",
+        help="Disable model checkpointing (enabled by default when run_dir exists)",
     )
     parser.add_argument(
         "--checkpoint-dir",
@@ -209,6 +224,12 @@ def add_callback_args(parser: argparse.ArgumentParser) -> None:
         "--checkpoint-monitor",
         default="score_mean",
         help="Checkpoint monitor metric (default: score_mean)",
+    )
+    parser.add_argument(
+        "--quiet",
+        "-q",
+        action="store_true",
+        help="Suppress progress output",
     )
 
 
@@ -256,6 +277,11 @@ def build_config_overrides(
         overrides["pretrain"] = False
     if getattr(args, "verbose", False):
         overrides["verbose"] = True
+
+    # Auto-detect CUDA when user didn't specify --device
+    if "device" not in overrides:
+        if torch.cuda.is_available():
+            overrides["device"] = "cuda"
 
     # Callbacks -- pass run_dir for auto-wiring
     callbacks = build_callbacks(args, run_dir=run_dir)
@@ -329,6 +355,7 @@ def train_parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def train_main(argv: list[str] | None = None) -> None:
     """Main logic for the ``galaxy-train`` command."""
     args = train_parse_args(argv)
+    quiet = getattr(args, "quiet", False)
 
     # --- Run directory setup ---
     from unicad_torch.run import (
@@ -341,7 +368,8 @@ def train_main(argv: list[str] | None = None) -> None:
 
     run_root = args.run_dir or "runs/"
     run_dir = create_run_dir(run_root, tag=args.run_name)
-    print(f"Run directory: {run_dir}")
+    if not quiet:
+        print(f"Run directory: {run_dir}")
 
     # Build config (pass run_dir for auto-wiring ModelCheckpoint)
     overrides = build_config_overrides(args, run_dir=run_dir)
@@ -355,45 +383,50 @@ def train_main(argv: list[str] | None = None) -> None:
     if args.resume:
         resume_path = resolve_resume_path(args.resume)
 
-    print("Galaxy Training")
-    print(
-        f"Config: k={config.k}, hidden_dim={config.hidden_dim}, "
-        f"latent_dim={config.resolved_latent_dim}, "
-        f"pretrain={config.pretrain}({config.pretrain_epochs}ep), "
-        f"em_iters={config.em_iters}, gravity={config.gravity_version}, "
-        f"score={config.score_type}, device={config.device}"
-    )
-    if config.callbacks:
-        cb_names = [type(cb).__name__ for cb in config.callbacks]
-        print(f"Callbacks: {', '.join(cb_names)}")
+    if not quiet:
+        print("Galaxy Training")
+        print(
+            f"Config: k={config.k}, hidden_dim={config.hidden_dim}, "
+            f"latent_dim={config.resolved_latent_dim}, "
+            f"pretrain={config.pretrain}({config.pretrain_epochs}ep), "
+            f"em_iters={config.em_iters}, gravity={config.gravity_version}, "
+            f"score={config.score_type}, device={config.device}"
+        )
+        if config.callbacks:
+            cb_names = [type(cb).__name__ for cb in config.callbacks]
+            print(f"Callbacks: {', '.join(cb_names)}")
 
     X, y = load_data(args.data)
-    print(f"Data: {X.shape[0]} samples, {X.shape[1]} features", end="")
-    if y is not None:
-        print(f", anomaly_rate={y.mean():.4f}")
-    else:
-        print()
+    if not quiet:
+        print(f"Data: {X.shape[0]} samples, {X.shape[1]} features", end="")
+        if y is not None:
+            print(f", anomaly_rate={y.mean():.4f}")
+        else:
+            print()
 
     model = Galaxy(config)
     t0 = time.perf_counter()
     model.fit(X, y_train=y, resume_from=resume_path)
     fit_time = time.perf_counter() - t0
 
-    print(f"\nFit complete in {fit_time:.2f}s")
-    print(f"  threshold_={model.threshold_:.4f}")
-    print(f"  effective_outlier_ratio_={model.effective_outlier_ratio_:.4f}")
-    print(f"  train_score_mean={model._train_score_mean:.4f}")
+    if not quiet:
+        print(f"\nFit complete in {fit_time:.2f}s")
+        print(f"  threshold_={model.threshold_:.4f}")
+        print(f"  effective_outlier_ratio_={model.effective_outlier_ratio_:.4f}")
+        print(f"  train_score_mean={model._train_score_mean:.4f}")
 
     # Save model
     output_path = args.output or str(run_dir / "model.pt")
     model.save(output_path)
-    print(f"\nModel saved to {output_path}")
+    if not quiet:
+        print(f"\nModel saved to {output_path}")
 
     # Auto-save history
     if config.callbacks:
         for cb in config.callbacks:
             if isinstance(cb, History) and cb.history:
-                print_history(cb.history)
+                if not quiet:
+                    print_history(cb.history)
                 save_history(cb.history, run_dir)
 
     # Save summary
@@ -410,7 +443,8 @@ def train_main(argv: list[str] | None = None) -> None:
         n_samples=X.shape[0],
         n_features=X.shape[1],
     )
-    print(f"Summary saved to {run_dir / 'summary.json'}")
+    if not quiet:
+        print(f"Summary saved to {run_dir / 'summary.json'}")
 
 
 # ---------------------------------------------------------------------------
@@ -787,8 +821,9 @@ def benchmark_parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output",
         default=None,
-        help="Save results to CSV file",
+        help="Save results to CSV file (default: saved to run directory)",
     )
+    add_run_args(parser)
     add_config_args(parser)
     add_callback_args(parser)
     return parser.parse_args(argv)
@@ -900,9 +935,25 @@ def _benchmark_print_table(results: list[dict[str, Any]]) -> None:
 def benchmark_main(argv: list[str] | None = None) -> None:
     """Main logic for the ``galaxy-benchmark`` command."""
     args = benchmark_parse_args(argv)
+    quiet = getattr(args, "quiet", False)
+
+    # --- Run directory setup ---
+    from unicad_torch.run import (
+        create_run_dir,
+        save_config,
+        save_summary,
+    )
+
+    run_root = args.run_dir or "runs/"
+    run_dir = create_run_dir(run_root, tag=args.run_name or "benchmark")
+    if not quiet:
+        print(f"Run directory: {run_dir}")
 
     overrides = build_config_overrides(args)
     config = GalaxyConfig().replace(**overrides)
+
+    # Save config at the start
+    save_config(config, run_dir)
 
     from unicad_torch.datasets import find_datasets
 
@@ -913,32 +964,36 @@ def benchmark_main(argv: list[str] | None = None) -> None:
         )
         sys.exit(1)
 
-    print(f"Galaxy Benchmark — {len(datasets)} dataset(s)")
-    print(
-        f"Config: k={config.k}, hidden_dim={config.hidden_dim}, "
-        f"pretrain={config.pretrain}({config.pretrain_epochs}ep), "
-        f"em_iters={config.em_iters}, gravity={config.gravity_version}, "
-        f"score={config.score_type}, device={config.device}"
-    )
-    if config.callbacks:
-        cb_names = [type(cb).__name__ for cb in config.callbacks]
-        print(f"Callbacks: {', '.join(cb_names)}")
-    print()
+    if not quiet:
+        print(f"Galaxy Benchmark — {len(datasets)} dataset(s)")
+        print(
+            f"Config: k={config.k}, hidden_dim={config.hidden_dim}, "
+            f"pretrain={config.pretrain}({config.pretrain_epochs}ep), "
+            f"em_iters={config.em_iters}, gravity={config.gravity_version}, "
+            f"score={config.score_type}, device={config.device}"
+        )
+        if config.callbacks:
+            cb_names = [type(cb).__name__ for cb in config.callbacks]
+            print(f"Callbacks: {', '.join(cb_names)}")
+        print()
 
     results: list[dict[str, Any]] = []
     for i, (name, path) in enumerate(datasets, 1):
-        print(f"[{i}/{len(datasets)}] {name} ...", end=" ", flush=True)
+        if not quiet:
+            print(f"[{i}/{len(datasets)}] {name} ...", end=" ", flush=True)
         try:
             r = _benchmark_single(name, path, config)
             results.append(r)
-            auc_str = (
-                f"{r['auc']:.4f}"
-                if isinstance(r["auc"], float) and not np.isnan(r["auc"])
-                else str(r["auc"])
-            )
-            print(f"AUC={auc_str}  ({r['status']})  fit={r['fit_time']}s")
+            if not quiet:
+                auc_str = (
+                    f"{r['auc']:.4f}"
+                    if isinstance(r["auc"], float) and not np.isnan(r["auc"])
+                    else str(r["auc"])
+                )
+                print(f"AUC={auc_str}  ({r['status']})  fit={r['fit_time']}s")
         except Exception as e:
-            print(f"FAILED: {e}")
+            if not quiet:
+                print(f"FAILED: {e}")
             results.append(
                 {
                     "dataset": name,
@@ -953,11 +1008,32 @@ def benchmark_main(argv: list[str] | None = None) -> None:
                 }
             )
 
-    print()
-    _benchmark_print_table(results)
+    if not quiet:
+        print()
+        _benchmark_print_table(results)
 
-    if args.output:
+    # Save results to run directory (and optional --output path)
+    results_path = str(run_dir / "results.csv")
+    save_csv(results, results_path)
+    if args.output and args.output != results_path:
         save_csv(results, args.output)
+
+    # Save summary
+    valid_aucs = [
+        r["auc"]
+        for r in results
+        if isinstance(r["auc"], float) and not np.isnan(r["auc"])
+    ]
+    save_summary(
+        run_dir,
+        data_path=args.data_dir,
+        n_samples=len(datasets),
+        train_score_mean=float(np.mean(valid_aucs)) if valid_aucs else None,
+        cli_args=sys.argv,
+    )
+    if not quiet:
+        print(f"Results saved to {results_path}")
+        print(f"Summary saved to {run_dir / 'summary.json'}")
 
 
 # ---------------------------------------------------------------------------

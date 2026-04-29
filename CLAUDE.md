@@ -127,7 +127,7 @@ Four-stage pipeline orchestrated by `Galaxy`, with callbacks firing at epoch/ite
 **Supporting modules**:
 - `config.py`: `GalaxyConfig` dataclass — hyperparameters with validation, device check, mismatch warning; `resolved_latent_dim` property
 - `callbacks.py`: Callback base class, `FitContext`, `CallbackManager`, and built-in callbacks
-- `cli.py`: CLI entry points and shared command utilities (`load_data`, `build_callbacks`, `add_config_args`, `add_callback_args`, `build_config_overrides`, `train_main`, `predict_main`, `benchmark_main`). Scripts are thin wrappers that import from this module.
+- `cli.py`: CLI entry points and shared command utilities (`load_data`, `build_callbacks`, `add_config_args`, `add_callback_args`, `add_run_args`, `build_config_overrides`, `train_main`, `predict_main`, `benchmark_main`). Scripts are thin wrappers that import from this module. History, Checkpoint, and TqdmProgress are default-on in `build_callbacks()`; users pass `--no-history`, `--no-checkpoint`, `--no-tqdm` to disable. Auto CUDA detection in `build_config_overrides()`. `--quiet`/`-q` suppresses print output.
 - `run.py`: Training run directory management — pure function module for organizing training runs into timestamped directories. Exports `generate_run_name`, `create_run_dir`, `save_config`, `save_history`, `save_summary`, `resolve_resume_path`, `find_runs`, `load_summary`. Used by `cli.py` for `galaxy-train` (auto-creates run dirs, saves config/history/summary) and `galaxy-runs` (lists/inspects past runs). `save_config` falls back to JSON if PyYAML unavailable. `resolve_resume_path` supports both `.pt` files and run directories (looks for `checkpoints/latest.pt` then `model.pt`).
 - `smm_torch.py`: `SMMTorch` — GPU-native Student-t Mixture Model (ν=1); device-aware Generator; relative tolerance convergence
 - `datasets.py`: `find_datasets()` — shared dataset discovery for scripts
@@ -152,12 +152,15 @@ Four-stage pipeline orchestrated by `Galaxy`, with callbacks firing at epoch/ite
 - **Gravity version + score type**: Default is `vector`/`vector` (matched pair). Scalar gravity with vector scoring triggers a `UserWarning` from `GalaxyConfig`.
 - **Absolute threshold**: `predict()` uses `threshold_` learned from training scores (quantile `1 - effective_outlier_ratio_`), not relative to the test batch.
 - **Label-informed outlier ratio**: When `y_train` is provided to `fit()`, the true anomaly rate (`y_train.mean()`) is stored as `effective_outlier_ratio_` for EM exclusion and threshold computation. The original `config.outlier_ratio` is NOT mutated. Stored in `fit_info_["outlier_ratio_source"]` as "labels" or "config".
-- **Logging**: All modules use `logging.getLogger("unicad_torch.{module}")` instead of `print()`. `verbose=True` sets the package logger to INFO level. TqdmProgress uses `tqdm.write()` to avoid interfering with progress bars.
+- **Logging**: All modules use `logging.getLogger("unicad_torch.{module}")` instead of `print()`. `verbose=True` sets the package logger to INFO level AND adds a `StreamHandler` if none exists (fixes silent logger issue). TqdmProgress uses `tqdm.write()` to avoid interfering with progress bars.
 - **Reproducibility**: `Galaxy.fit()` calls `torch.manual_seed(config.seed)` at the start, covering model initialization and DataLoader shuffle.
 - **Input requirements**: float32 preferred (float64 triggers warning); no NaN/Inf; minimum `k` samples.
 - **resolved_latent_dim**: `GalaxyConfig.resolved_latent_dim` property returns `latent_dim` if set, else `hidden_dim`. Used by `Galaxy.fit()` and `Galaxy.load()` to avoid duplication.
-- **Run directory management**: `run.py` is a pure function module (no class). `train_main()` creates a run dir, saves config before training, then saves model/history/summary after training. ModelCheckpoint auto-wires `dirpath` to `{run_dir}/checkpoints/` when user hasn't explicitly set `--checkpoint-dir` (sentinel: `dirpath == "checkpoints/"`). `--output` is optional — if omitted, model is saved to `{run_dir}/model.pt`.
+- **Run directory management**: `run.py` is a pure function module (no class). `train_main()` and `benchmark_main()` both create run dirs. Train saves config/model/history/summary; Benchmark saves config/results.csv/summary.
 - **Resume from run directory**: `resolve_resume_path()` handles both `.pt` files (direct) and directories (fallback chain: `checkpoints/latest.pt` → `model.pt` → FileNotFoundError).
+- **Default-on callbacks**: `build_callbacks()` creates History, ModelCheckpoint (when run_dir), and TqdmProgress by default. Users disable with `--no-history`, `--no-checkpoint`, `--no-tqdm`. No `--history`/`--checkpoint`/`--tqdm` flags (removed).
+- **Auto CUDA detection**: `build_config_overrides()` auto-detects `torch.cuda.is_available()` when `--device` is not specified. Explicit `--device cpu` overrides.
+- **Quiet mode**: `--quiet`/`-q` suppresses all `print()` output in CLI commands. Summary and results are still written to files.
 
 ## GalaxyConfig Fields
 

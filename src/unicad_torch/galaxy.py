@@ -109,9 +109,12 @@ class Galaxy:
             if isinstance(cb, ModelCheckpoint):
                 cb._galaxy_ref = self  # noqa: SLF001
 
-        # Verbose mode: ensure package logger is at INFO
+        # Verbose mode: ensure package logger is at INFO with a handler
         if self.config.verbose:
-            logging.getLogger("unicad_torch").setLevel(logging.INFO)
+            pkg_logger = logging.getLogger("unicad_torch")
+            pkg_logger.setLevel(logging.INFO)
+            if not pkg_logger.handlers:
+                pkg_logger.addHandler(logging.StreamHandler())
 
         # --- callback: fit begin ---
         cb_mgr.fire("on_fit_begin", ctx)
@@ -236,9 +239,12 @@ class Galaxy:
         ):
             raise RuntimeError("Incomplete fit state — nothing to save")
 
-        # Serialize config without callbacks (they contain unpicklable closures)
-        config_dict = dataclasses.asdict(self.config)
-        config_dict.pop("callbacks", None)
+        # Serialize config without callbacks (they contain unpicklable objects)
+        config_dict = {
+            f.name: getattr(self.config, f.name)
+            for f in dataclasses.fields(self.config)
+            if f.name != "callbacks"
+        }
 
         state: dict[str, object] = {
             "save_format_version": _SAVE_FORMAT_VERSION,

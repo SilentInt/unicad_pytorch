@@ -86,11 +86,13 @@ print(model.fit_info_["outlier_ratio_source"])  # "labels" 或 "config"
 ### 命令行
 
 ```bash
-# 训练（自动创建运行目录，保存模型/配置/日志）
-galaxy-train --data data/Classical/38_thyroid.npz \
-    --tqdm --history --early-stopping --checkpoint
+# 最简训练（自动 GPU 检测、进度条、历史记录、检查点、运行目录）
+galaxy-train --data data/Classical/38_thyroid.npz
 
-# 训练并指定输出路径（传统方式，仍可用）
+# 启用早停
+galaxy-train --data data/Classical/38_thyroid.npz --early-stopping
+
+# 指定输出路径（传统方式，仍可用）
 galaxy-train --data data/Classical/38_thyroid.npz --output galaxy.pt
 
 # 推理
@@ -98,8 +100,8 @@ galaxy-predict --model galaxy.pt --data data/Classical/38_thyroid.npz
 galaxy-predict --model galaxy.pt --data test.csv --labels
 galaxy-predict --model galaxy.pt --data test.csv --output-scores scores.csv
 
-# 基准测试
-galaxy-benchmark --datasets 38_thyroid --verbose --tqdm
+# 基准测试（结果自动保存到运行目录）
+galaxy-benchmark --datasets 38_thyroid --verbose
 galaxy-benchmark --data-dir data/Classical --output results.csv
 
 # 查看历史运行
@@ -348,6 +350,126 @@ outlier_ratio: 0.02
 
 ---
 
+## 常见使用场景
+
+### 最简训练
+
+一条命令完成训练，自动检测 GPU、记录历史、保存检查点：
+
+```bash
+galaxy-train --data data/Classical/38_thyroid.npz
+# 输出到 runs/2026-04-29_14-30-22/，含 config.yaml、model.pt、history.json、summary.json
+```
+
+### 自定义超参数
+
+通过命令行覆盖任意配置：
+
+```bash
+galaxy-train --data data.npz --k 5 --em-iters 10 --outlier-ratio 0.1
+```
+
+### 有标签训练
+
+当数据包含 `y` 列（0/1 标签）时，真实异常率自动替代 `outlier_ratio`：
+
+```bash
+galaxy-train --data labeled_data.csv
+# effective_outlier_ratio 自动设为 y 的均值
+```
+
+### GPU / CPU 选择
+
+默认自动检测 CUDA 可用性。显式指定设备：
+
+```bash
+galaxy-train --data data.npz --device cpu     # 强制 CPU
+galaxy-train --data data.npz --device cuda:0   # 指定 GPU
+```
+
+### 添加早停
+
+```bash
+galaxy-train --data data.npz --early-stopping --early-stopping-patience 5
+```
+
+### 关闭默认进度条
+
+```bash
+galaxy-train --data data.npz --no-tqdm
+```
+
+### 恢复中断训练
+
+传入运行目录或检查点路径：
+
+```bash
+galaxy-train --data data.npz --resume runs/2026-04-29_14-30-22
+# 自动查找 checkpoints/latest.pt
+```
+
+### 查看与对比历史运行
+
+```bash
+galaxy-runs                              # 列出所有运行
+galaxy-runs --detail 2026-04-29_14-30-22  # 查看详情
+galaxy-runs --compare run1 run2           # 对比两次运行
+```
+
+### 批量预测
+
+对一个目录下的多个数据集批量推理：
+
+```bash
+galaxy-predict --model model.pt --data-dir data/Classical
+```
+
+### 导出逐样本异常分数
+
+```bash
+galaxy-predict --model model.pt --data test.csv --output-scores scores.csv
+```
+
+### 基准测试
+
+```bash
+galaxy-benchmark --datasets 38_thyroid 2_annthyroid --verbose
+galaxy-benchmark --data-dir data/Classical --output results.csv
+```
+
+### 使用配置文件复现实验
+
+```yaml
+# train.yaml
+k: 10
+hidden_dim: 128
+em_iters: 5
+outlier_ratio: 0.05
+device: cuda
+```
+
+```bash
+galaxy-train --config train.yaml --data data.npz
+```
+
+### 静默模式
+
+抑制终端输出（summary 仍写入文件），适合批量脚本：
+
+```bash
+galaxy-train --data data.npz --quiet
+```
+
+### 禁用默认回调
+
+History、Checkpoint、TqdmProgress 默认启用，可显式关闭：
+
+```bash
+galaxy-train --data data.npz --no-history --no-checkpoint --no-tqdm
+```
+
+---
+
 ## CLI 命令详解
 
 ### galaxy-train — 训练模型
@@ -365,16 +487,17 @@ galaxy-train --data <数据文件> --output <模型路径> [选项]
 | `--config` | 配置文件（.yaml/.yml/.json） |
 | `--resume` | 从检查点恢复训练（支持运行目录路径） |
 | `--k`, `--hidden-dim`, `--em-iters` ... | 覆盖 GalaxyConfig 字段 |
-| `--history` | 记录训练历史 |
+| `--no-history` | 禁用训练历史记录（默认启用） |
+| `--no-checkpoint` | 禁用模型检查点（默认启用） |
+| `--no-tqdm` | 禁用进度条（默认启用） |
 | `--early-stopping` | 启用早停 |
 | `--early-stopping-patience` | 早停耐心值（默认 10） |
 | `--early-stopping-monitor` | 早停监控指标（默认 pretrain_loss） |
-| `--checkpoint` | 保存模型检查点 |
-| `--checkpoint-dir` | 检查点目录（默认 checkpoints/） |
+| `--checkpoint-dir` | 检查点目录（默认自动设为运行目录下） |
 | `--checkpoint-best` | 保存最优检查点 |
 | `--checkpoint-monitor` | 检查点监控指标（默认 score_mean） |
-| `--tqdm` | 显示进度条 |
-| `--verbose` | 输出详细日志 |
+| `--verbose` | 输出详细训练日志 |
+| `--quiet`, `-q` | 抑制终端输出 |
 
 ### galaxy-predict — 推理评估
 
@@ -406,7 +529,9 @@ galaxy-benchmark --data-dir <数据目录> [选项]
 |------|------|
 | `--data-dir` | 数据目录（默认 data/Classical） |
 | `--datasets` | 指定数据集名称 |
-| `--output` | 结果保存为 CSV |
+| `--output` | 额外保存结果到指定 CSV 路径（默认保存到运行目录） |
+| `--run-dir` | 运行根目录（默认 runs/） |
+| `--run-name` | 运行标签 |
 | 其他 | 同 galaxy-train 的配置覆盖和回调参数 |
 
 ### galaxy-runs — 查看历史运行
