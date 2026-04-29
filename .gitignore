@@ -1,11 +1,30 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
-.venv/
-.ruff_cache/
-.pytest_cache/
 *.egg-info/
 dist/
 build/
+
+# Virtual environments
+.venv/
+
+# Tools
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.pyright/
+
+# Data (large, downloaded separately)
 data/
+
+# Training output
+runs/
+checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code
 .claude/
