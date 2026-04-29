@@ -88,6 +88,9 @@ def aggregate_force_vector(
     Scales by max log-force to keep exp() bounded, then computes
     the norm of the weighted unit-direction force sum.
 
+    Per the paper (Eq.9), direction is the unit vector
+    F̂_ik = (μ_k - z_i) / ‖μ_k - z_i‖.
+
     Args:
         log_forces: (N, K) log-forces.
         means: (K, D) cluster means.

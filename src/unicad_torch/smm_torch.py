@@ -127,8 +127,11 @@ class SMMTorch:
             log_norm = torch.logsumexp(log_resp, dim=1, keepdim=True)  # (N, 1)
             resp = torch.exp(log_resp - log_norm)  # (N, K)
 
-            # Scale factors: u_ik = (ν + D) / (ν + D_M²)
-            u = ((nu + D) / (nu + maha)).to(dtype)  # (N, K)
+            # Scale factors: u_ik = (ν + 1) / (ν + D_M²)
+            # Paper uses univariate-style Student-t density (Eq.3/4 in the doc)
+            # where exponent is -(ν+1)/2 regardless of dimension D,
+            # NOT the standard multivariate -(ν+D)/2.
+            u = ((nu + 1) / (nu + maha)).to(dtype)  # (N, K)
 
             # ---- M-step ----
             nk = resp.sum(dim=0).clamp(min=1e-30)  # (K,)

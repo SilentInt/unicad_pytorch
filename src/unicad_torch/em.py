@@ -50,6 +50,9 @@ class GalaxyEM:
         )
 
         # Resolve gravity aggregation at construction time
+        # aggregate_force_{scalar,vector} return -log(force) = -J (per sample)
+        # Gravity loss = Σ(-J) so total = recon + gravity = g + (-J) = g - J
+        # Minimizing g - J ⟹ minimize g AND maximize J
         if config.gravity_version == "scalar":
 
             def _gravity_scalar(
@@ -57,7 +60,7 @@ class GalaxyEM:
                 means: torch.Tensor,
                 embed: torch.Tensor,
             ) -> torch.Tensor:
-                return -aggregate_force_scalar(lf).sum()
+                return aggregate_force_scalar(lf).sum()
 
             self._compute_gravity_loss: Callable[
                 [torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor
@@ -69,7 +72,7 @@ class GalaxyEM:
                 means: torch.Tensor,
                 embed: torch.Tensor,
             ) -> torch.Tensor:
-                return -aggregate_force_vector(lf, means, embed).sum()
+                return aggregate_force_vector(lf, means, embed).sum()
 
             self._compute_gravity_loss = _gravity_vector
         else:
@@ -137,10 +140,11 @@ class GalaxyEM:
             if callbacks is not None and ctx is not None:
                 callbacks.fire("on_em_iter_begin", ctx)
 
-            X_filtered, Z_filtered, n_excluded = self._exclude_outlier_set(X, Z)
+            X_filtered, _, n_excluded = self._exclude_outlier_set(X, Z)
             n_excluded_per_iter.append(n_excluded)
             self._update_network(X_filtered, callbacks=callbacks, ctx=ctx)
-            self._update_prototypes(X_filtered, Z_filtered)
+            # Re-encode with updated encoder (encoder changed during _update_network)
+            self._update_prototypes(X_filtered, Z=None)
 
             # Re-encode full X for next iteration's outlier exclusion
             # (encoder has changed during _update_network)
