@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1920, initial-scale=1">
+<title>从 Galaxy 到马氏距离 — 无人机时序异常检测</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Noto+Sans+SC:wght@300;400;500;700;900&family=Noto+Serif+SC:wght@500;700;900&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Noto Sans SC', system-ui, sans-serif;
+    background: #fefcf8; color: #1a1814;
+    overflow: hidden; height: 100vh; width: 100vw;
+    font-weight: 400;
+  }
+
+  /* ── slides ── */
+  .slides { position: relative; height: 100%; width: 100%; }
+  .slide {
+    position: absolute; inset: 0;
+    display: none; flex-direction: column; justify-content: center;
+    padding: 56px 96px;
+    background: #fefcf8;
+  }
+  .slide.active { display: flex; }
+
+  /* ── typography ── */
+  h1 {
+    font-family: 'Noto Serif SC', serif;
+    font-size: 5rem; font-weight: 900; line-height: 1.1;
+    color: #1a365d; margin-bottom: 16px; letter-spacing: -0.02em;
+  }
+  h1 em { color: #c2410c; font-style: normal; }
+  h2 {
+    font-family: 'Noto Serif SC', serif;
+    font-size: 3.4rem; font-weight: 700; color: #1a365d;
+    margin-bottom: 32px; padding-bottom: 14px;
+    border-bottom: 2px solid #e8e4db; letter-spacing: -0.01em;
+  }
+  h3 {
+    font-family: 'Noto Serif SC', serif;
+    font-size: 1.8rem; font-weight: 700; color: #2d2a26;
+    margin: 0 0 10px;
+  }
+  p { font-size: 1.3rem; line-height: 1.7; margin: 10px 0; color: #3d3a36; }
+  ul { padding-left: 24px; }
+  li { font-size: 1.25rem; line-height: 1.65; margin: 6px 0; color: #3d3a36; }
+  .sub { font-size: 1.7rem; color: #8b857c; font-weight: 300; margin-bottom: 24px; }
+
+  /* ── labels ── */
+  .tag {
+    display: inline-block; background: #f3efe7; color: #c2410c;
+    padding: 5px 18px; font-size: 0.85rem; margin: 3px;
+    font-weight: 500; border: 1px solid #e0d9cd;
+    font-family: 'JetBrains Mono', monospace; letter-spacing: 0.04em;
+  }
+
+  /* ── tables ── */
+  table {
+    border-collapse: collapse; width: 100%; margin: 10px 0;
+    font-family: 'JetBrains Mono', monospace; font-size: 1.08rem;
+  }
+  th {
+    background: transparent; text-align: left; padding: 14px 20px;
+    border-bottom: 2px solid #c2410c; font-weight: 600;
+    font-size: 0.92rem; color: #8b857c; text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  td { padding: 12px 20px; border-bottom: 1px solid #ede8dd; font-size: 1.12rem; }
+  tr:hover td { background: #faf7f0; }
+  .hl { color: #0d6b4d; font-weight: 700; }
+  .wr { color: #c2410c; font-weight: 600; }
+  .dm { color: #8b857c; }
+
+  /* ── boxes ── */
+  .box {
+    background: #fff; border: 1px solid #e8e4db;
+    padding: 30px 36px; margin: 12px 0;
+  }
+  .box.accent { border-left: 4px solid #c2410c; }
+  .box.green  { border-left: 4px solid #0d6b4d; }
+  .box.blue   { border-left: 4px solid #1a365d; }
+  .box.amber  { border-left: 4px solid #d4780a; }
+
+  /* ── code ── */
+  .code {
+    background: #faf7f0; border: 1px solid #e8e4db;
+    padding: 24px 32px; font-family: 'JetBrains Mono', monospace;
+    font-size: 1.08rem; line-height: 1.65; color: #4d4a44;
+    white-space: pre-wrap;
+  }
+  .code .cm { color: #8b857c; }
+  .code .kw { color: #c2410c; }
+
+  /* ── architecture ── */
+  .arch {
+    display: flex; align-items: center; justify-content: center;
+    gap: 12px; flex-wrap: wrap; margin: 28px 0;
+  }
+  .ab {
+    background: #fff; border: 1px solid #ddd8cc;
+    padding: 16px 26px; text-align: center; font-size: 0.95rem;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .ab.red  { border-color: #c2410c; color: #c2410c; }
+  .ab.blue { border-color: #1a365d; color: #1a365d; }
+  .ab.green{ border-color: #0d6b4d; color: #0d6b4d; }
+  .arr { color: #c4beb2; font-size: 1.3rem; margin: 0 4px; }
+
+  /* ── note ── */
+  .note {
+    font-size: 1.12rem; color: #6b6560;
+    padding: 20px 30px; background: #faf7f0;
+    border-left: 4px solid #1a365d; margin: 16px 0; line-height: 1.6;
+  }
+
+  /* ── layout helpers ── */
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; }
+  .big { font-size: 3rem; font-weight: 900; font-family: 'JetBrains Mono', monospace; color: #0d6b4d; }
+  .rule { width: 100%; height: 1px; background: #e8e4db; margin: 28px 0; }
+  .rule.short { width: 80px; height: 3px; background: #c2410c; margin: 28px auto; }
+  .center { text-align: center; }
+
+  /* ── navigation ── */
+  .nav { position: fixed; bottom: 24px; right: 36px; z-index: 100; display: flex; gap: 10px; }
+  .nav-btn {
+    background: #f3efe7; border: 1px solid #ddd8cc; color: #4d4a44;
+    padding: 10px 24px; cursor: pointer; font-size: 0.9rem;
+    font-family: 'JetBrains Mono', monospace; font-weight: 600;
+    letter-spacing: 0.05em; transition: all 0.15s;
+  }
+  .nav-btn:hover { border-color: #c2410c; color: #c2410c; }
+  .pg {
+    position: fixed; bottom: 24px; left: 36px; color: #c4beb2;
+    font-size: 0.9rem; font-family: 'JetBrains Mono', monospace;
+  }
+  .progress {
+    position: fixed; top: 0; left: 0; height: 3px;
+    background: #c2410c; transition: width 0.3s; z-index: 200;
+  }
+</style>
+</head>
+<body>
+
+<div class="progress" id="progress"></div>
+<div class="slides" id="slides">
+
+<!-- ═══════════ 0: TITLE ═══════════ -->
+<div class="slide active center" style="padding:80px 160px">
+  <div style="margin-bottom:12px">
+    <span class="tag">UAV ANOMALY DETECTION</span>
+    <span class="tag">UNSUPERVISED</span>
+    <span class="tag">TIME‑SERIES</span>
+  </div>
+  <h1 style="margin-bottom:24px">从 <em>Galaxy 聚类</em>到<em>马氏距离</em></h1>
+  <p class="sub">无人机时序数据异常检测 — 架构演变与消融实验</p>
+  <div class="arch" style="margin:36px 0">
+    <div class="ab blue">ConditionalGRU<div class="dm" style="font-size:0.75rem;margin-top:4px">因果预测器</div></div>
+    <div class="arr">→</div>
+    <div class="ab red">预测残差<div class="dm" style="font-size:0.75rem;margin-top:4px">(真实−预测)²</div></div>
+    <div class="arr">→</div>
+    <div class="ab red">窗口统计<div class="dm" style="font-size:0.75rem;margin-top:4px">1s / 3s</div></div>
+    <div class="arr">→</div>
+    <div class="ab green">马氏距离<div class="dm" style="font-size:0.75rem;margin-top:4px">(x−μ)ᵀΣ⁻¹(x−μ)</div></div>
+  </div>
+  <div class="rule short"></div>
+  <div class="two" style="gap:48px;margin-top:8px">
+    <div class="box center" style="border-top:3px solid #c2410c">
+      <p class="dm" style="font-size:0.95rem;margin-bottom:6px">ALFA · 固定翼实飞 · 46 序列</p>
+      <p style="font-size:1.1rem">MeanSeq AUC <span class="big" style="font-size:2.8rem">0.951</span></p>
+    </div>
+    <div class="box center" style="border-top:3px solid #c2410c">
+      <p class="dm" style="font-size:0.95rem;margin-bottom:6px">Basic · 四旋翼 SITL · 70 序列</p>
+      <p style="font-size:1.1rem">MeanSeq AUC <span class="big" style="font-size:2.8rem">0.952</span></p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 1: ARCHITECTURE COMPARISON ═══════════ -->
+<div class="slide">
+  <h2>架构对比：Galaxy 原始 vs 本方案</h2>
+  <div style="text-align:center;margin-bottom:16px">
+    <img src="images/Galaxy 原始 vs 本方案对比.png" style="max-width:85%;max-height:58vh;object-fit:contain">
+  </div>
+  <div class="two">
+    <div class="box green" style="margin-top:0">
+      <h3 style="color:#0d6b4d">保留的 Galaxy 思想</h3>
+      <ul style="font-size:1.1rem">
+        <li>无监督：仅用正常数据训练</li>
+        <li>紧致性：正常样本越紧，异常越暴露</li>
+        <li>距离评分：到正常中心的距离 = 异常分数</li>
+      </ul>
+    </div>
+    <div class="box accent" style="margin-top:0">
+      <h3 style="color:#c2410c">差异</h3>
+      <ul style="font-size:1.1rem">
+        <li>AE → ConditionalGRU（因果预测）</li>
+        <li>数据重建 → 指令→响应预测</li>
+        <li>SMM + GOF → 马氏距离</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 2: DATA ═══════════ -->
+<div class="slide">
+  <h2>无人机时序数据异常检测</h2>
+  <div class="two">
+    <div class="box">
+      <h3>ALFA · Carbon Z 固定翼</h3>
+      <table>
+        <tr><td>来源</td><td>Pixhawk 实飞, CMU AIR Lab 2018</td></tr>
+        <tr><td>规模</td><td>46 序列, ~47K 帧 @ 10Hz</td></tr>
+        <tr><td>故障</td><td>执行器卡死: 发动机(23) / 副翼(8) / 方向舵(3) / 升降舵(2)</td></tr>
+        <tr><td>特征</td><td>21D → 78D 窗口统计</td></tr>
+        <tr><td>特点</td><td>实飞噪声, 传感器少, 标签清晰</td></tr>
+      </table>
+    </div>
+    <div class="box">
+      <h3>Basic · 四旋翼 SITL</h3>
+      <table>
+        <tr><td>来源</td><td>ArduPilot SITL 仿真, 2022</td></tr>
+        <tr><td>规模</td><td>70 序列, ~275K 帧 @ 10Hz</td></tr>
+        <tr><td>故障</td><td>传感器故障 6 种: GPS / 罗盘 / 陀螺 / 加计 / 气压计 / RC</td></tr>
+        <tr><td>特征</td><td>47D → 240D 窗口统计</td></tr>
+        <tr><td>特点</td><td>传感器丰富, 帧量大, 仿真环境</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="note">
+    核心挑战：时序数据不是独立样本——当前帧的"正常与否"依赖于过去几秒的飞行上下文。<br>直接套用 Galaxy 的问题：AE 不建模时间依赖，聚类也不利用时序结构。
+  </div>
+</div>
+
+<!-- ═══════════ 3: ADAPTATION ═══════════ -->
+<div class="slide">
+  <h2>适配思路：从空间建模到行为预测</h2>
+  <div class="two">
+    <div class="box" style="border:1px solid #e8e4db">
+      <h3 style="color:#8b857c">Galaxy 做什么</h3>
+      <p style="font-size:1.4rem;color:#8b857c">把数据编码到一个"好的隐空间"<br>→ 在该空间聚类<br>→ 看新点离簇多远</p>
+      <p class="dm" style="margin-top:14px;font-size:1rem">空间建模路线：先降维，再聚簇</p>
+    </div>
+    <div class="box accent">
+      <h3 style="color:#c2410c">我们做什么</h3>
+      <p style="font-size:1.4rem">让模型学习"正常飞机如何响应指令"<br>→ 看真实响应偏离预测多远<br>→ 在偏差空间上检测异常</p>
+      <p style="margin-top:14px;font-size:1rem;color:#c2410c">行为预测路线：先建世界模型，再找偏差</p>
+    </div>
+  </div>
+  <p style="text-align:center;color:#8b857c;margin:20px 0 12px">核心改动：用 ConditionalGRU 替代 Autoencoder</p>
+  <div class="arch">
+    <div class="ab"><span class="dm">Galaxy</span><br>AE: X → z → X̂<br><span class="dm" style="font-size:0.8rem">学到"X 长什么样"</span></div>
+    <div class="arr">→</div>
+    <div class="ab red"><span style="color:#c2410c">Ours</span><br>GRU: (历史₇₅, cmdₜ) → resp̂ₜ<br><span style="color:#c2410c;font-size:0.8rem">学到"正常飞机应如何响应"</span></div>
+  </div>
+  <div class="note" style="text-align:center">
+    关键洞察：无人机有自然的因果结构——指令（驾驶员操作）→ 响应（传感器读数）。<br>利用这个结构，把"异常"定义为"响应偏离了因果规律的预期"。
+  </div>
+</div>
+
+<!-- ═══════════ 4: OVERVIEW ═══════════ -->
+<div class="slide">
+  <h2>三阶段端到端总览</h2>
+  <div style="text-align:center">
+    <img src="images/三阶段端到端总览.png" style="max-width:92%;max-height:71vh;object-fit:contain">
+  </div>
+</div>
+
+<!-- ═══════════ 4b: ConditionalGRU ═══════════ -->
+<div class="slide">
+  <h2>ConditionalGRU 内部结构</h2>
+  <div style="text-align:center">
+    <img src="images/ConditionalGRU 内部结构.png" style="max-width:88%;max-height:71vh;object-fit:contain">
+  </div>
+</div>
+
+<!-- ═══════════ 4c: RESIDUAL PIPELINE ═══════════ -->
+<div class="slide">
+  <h2>残差 → 特征工程流水线</h2>
+  <div style="text-align:center">
+    <img src="images/残差→特征工程流水线.png" style="max-width:90%;max-height:71vh;object-fit:contain">
+  </div>
+</div>
+
+<!-- ═══════════ 5: KEPT VS REPLACED ═══════════ -->
+<div class="slide">
+  <h2>从 Galaxy 继承了什么，改变了什么</h2>
+  <div class="two">
+    <div class="box green">
+      <h3 style="color:#0d6b4d">保留的 Galaxy 思想</h3>
+      <table>
+        <tr><td>无监督范式</td><td>仅用正常数据训练，不依赖故障标签</td></tr>
+        <tr><td>正常数据训练编码器</td><td>ConditionalGRU 只在正常帧上学习</td></tr>
+        <tr><td>表示空间</td><td>残差窗口统计构成"异常检测空间"</td></tr>
+        <tr><td>紧致性 = 检测力</td><td>正常特征越紧致，异常越暴露</td></tr>
+        <tr><td>距离 → 分数</td><td>到正常分布中心的马氏距离 → 异常分数</td></tr>
+        <tr><td>消融方法论</td><td>系统化消融实验驱动架构演进</td></tr>
+      </table>
+    </div>
+    <div class="box accent">
+      <h3 style="color:#c2410c">替换 / 新增的部分</h3>
+      <table>
+        <tr><td>AE 编码器</td><td>→ ConditionalGRU 因果预测器</td></tr>
+        <tr><td>从数据重建</td><td>→ 从指令预测响应</td></tr>
+        <tr><td>隐空间</td><td>→ 预测残差空间</td></tr>
+        <tr><td>Gravity Loss</td><td>→ 不需要（残差已足够紧致）</td></tr>
+        <tr><td>SMM 聚类</td><td>→ 马氏距离（发现 SMM 退化为 k=1）</td></tr>
+        <tr><td>EM 迭代</td><td>→ 协方差矩阵直接求逆</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 6: ABLATION JOURNEY ═══════════ -->
+<div class="slide">
+  <h2>消融实验驱动的架构演进</h2>
+  <table>
+    <tr><th>版本</th><th>架构</th><th>MSeq</th><th>关键发现</th></tr>
+    <tr><td>V3</td><td>双GRU + 309D + Galaxy AE</td><td>0.908</td><td>309D 中 231D 纯属加噪</td></tr>
+    <tr><td>V4</td><td>Transformer 掩码预测</td><td>0.892</td><td>通道互预测性差，方向错误</td></tr>
+    <tr><td>V5</td><td>ErrorSequenceGRU + SMM</td><td>0.897</td><td>GRU 学不到有效误差模式</td></tr>
+    <tr><td>V6</td><td>多任务共享 GRU</td><td>0.884</td><td>逆向前向不可学，放弃共享</td></tr>
+    <tr class="hl"><td>V7 h=10</td><td>单GRU + 78D 窗口统计 + SMM</td><td class="hl">0.932</td><td>极简 &gt; 复杂；GRU &gt; LSTM/Conv/TCN</td></tr>
+    <tr class="hl"><td>V7 h=75</td><td>单GRU + 78D + Galaxy AE 128→64</td><td class="hl">0.945</td><td>7.5s 覆盖完整机动周期</td></tr>
+    <tr class="hl"><td><strong>最终</strong></td><td><strong>单GRU + 78D/240D + 马氏距离</strong></td><td class="hl"><strong>0.951 / 0.952</strong></td><td><strong>省去 AE / SMM / Gravity Loss</strong></td></tr>
+  </table>
+</div>
+
+<!-- ═══════════ 6b: ABLATION DETAILS ═══════════ -->
+<div class="slide">
+  <h2>关键消融实验数据</h2>
+  <div class="two">
+    <div class="box">
+      <h3>编码器对比 (Basic 14seq)</h3>
+      <table>
+        <tr><th>编码器</th><th>MSeq</th><th>Δ</th></tr>
+        <tr><td>GRU 64×2L</td><td class="hl">0.932</td><td>—</td></tr>
+        <tr><td>LSTM 64×2L</td><td>0.909</td><td class="wr">−0.023</td></tr>
+        <tr><td>Conv1d k3×3L</td><td>0.886</td><td class="wr">−0.046</td></tr>
+        <tr><td>TCN residual k3</td><td>0.815</td><td class="wr">−0.117</td></tr>
+      </table>
+    </div>
+    <div class="box">
+      <h3>检测方法对比 (Basic 70seq)</h3>
+      <table>
+        <tr><th>方法</th><th>MSeq</th><th>训练时间</th></tr>
+        <tr><td>GRU 隐状态聚类</td><td class="wr">0.878</td><td>—</td></tr>
+        <tr><td>Galaxy AE+SMM k=5</td><td>0.938</td><td>81s</td></tr>
+        <tr><td>Deep SVDD v2</td><td>0.939</td><td>207s</td></tr>
+        <tr class="hl"><td><strong>马氏距离</strong></td><td class="hl">0.952</td><td>0s</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="box" style="margin-top:16px">
+    <h3>其他消融</h3>
+    <table>
+      <tr><td>历史窗口 10→75帧</td><td class="hl">0.932 → 0.942</td><td>指令窗口 K=1→3</td><td class="wr">0.942 → 0.926</td></tr>
+      <tr><td>采样率 25Hz→10Hz</td><td class="hl">0.860 → 0.938</td><td>独立CSV→主CSV</td><td class="hl">0.857 → 0.938</td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════ 7: SMM DEGENERATION ═══════════ -->
+<div class="slide">
+  <h2>关键发现：Galaxy SMM 在两个数据集上均退化为 k=1</h2>
+  <div class="two">
+    <div class="box">
+      <h3>ALFA · 78D · 35,980 正常帧</h3>
+      <div class="code">
+簇 0 · <span class="wr">    0</span>  █
+<span class="hl">簇 1 · 35,980</span>  ████████████████
+簇 2 · <span class="wr">    0</span>  █
+簇 3 · <span class="wr">    0</span>  █
+簇 4 · <span class="wr">    0</span>  █
+
+100% 落入单一簇，4/5 空置</div>
+    </div>
+    <div class="box">
+      <h3>Basic · 240D · 147,045 正常帧</h3>
+      <div class="code">
+簇 0 · <span class="wr">      0</span>  █
+簇 1 · <span class="wr">      0</span>  █
+簇 2 · <span class="wr">      0</span>  █
+<span class="hl">簇 3 · 147,045</span>  ████████████████
+簇 4 · <span class="wr">      0</span>  █
+
+100% 落入单一簇，4/5 空置</div>
+    </div>
+  </div>
+  <div class="box amber" style="margin-top:20px">
+    <p>Gravity Loss 将正常帧压至极端紧致 → SMM 多簇能力完全未用到 → Galaxy 实际等价于 k=1 马氏距离。在两个完全不同的飞行器、故障类型、数据规模上独立验证，结论一致。</p>
+  </div>
+</div>
+
+<!-- ═══════════ 8: METHOD COMPARISON ═══════════ -->
+<div class="slide">
+  <h2>检测方法性能对比</h2>
+  <div class="two">
+    <div class="box">
+      <h3>Basic 四旋翼 (70 序列)</h3>
+      <table>
+        <tr><th>方法</th><th>MeanSeq</th><th>训练</th><th>参数</th></tr>
+        <tr><td>GRU 隐状态聚类</td><td class="wr">0.878</td><td>—</td><td>0</td></tr>
+        <tr><td>SMM direct k=5</td><td>0.920</td><td>—</td><td>—</td></tr>
+        <tr><td>Galaxy AE+SMM</td><td>0.938</td><td>81s</td><td>300K</td></tr>
+        <tr><td>Deep SVDD v1</td><td>0.938</td><td>68s</td><td>150K</td></tr>
+        <tr><td>Deep SVDD v2</td><td>0.939</td><td>207s</td><td>176K</td></tr>
+        <tr class="hl"><td><strong>马氏距离</strong></td><td class="hl">0.952</td><td>0s</td><td>240²</td></tr>
+      </table>
+    </div>
+    <div class="box">
+      <h3>ALFA 固定翼 (46 序列)</h3>
+      <table>
+        <tr><th>方法</th><th>MeanSeq</th></tr>
+        <tr><td>SMM direct k=5</td><td>0.942</td></tr>
+        <tr><td>Galaxy AE+SMM k=5</td><td>0.945</td></tr>
+        <tr class="hl"><td><strong>马氏距离</strong></td><td class="hl">0.951</td></tr>
+      </table>
+      <p style="margin-top:20px;color:#8b857c">马氏距离在两个数据集、不同特征维度上均一致超越 Galaxy AE+SMM</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 8b: PER-FAULT ═══════════ -->
+<div class="slide">
+  <h2>按故障类型的检测性能</h2>
+  <div class="two">
+    <div class="box">
+      <h3>Basic · 传感器故障 (马氏距离)</h3>
+      <table>
+        <tr><th>故障类型</th><th>序列</th><th>Mean AUC</th></tr>
+        <tr><td>陀螺仪</td><td>10</td><td class="hl">0.998</td></tr>
+        <tr><td>加速度计</td><td>10</td><td class="hl">0.998</td></tr>
+        <tr><td>RC 遥控</td><td>10</td><td class="hl">0.955</td></tr>
+        <tr><td>罗盘</td><td>10</td><td class="hl">0.954</td></tr>
+        <tr><td>GPS</td><td>10</td><td>0.892</td></tr>
+        <tr><td>气压计</td><td>10</td><td class="wr">0.875</td></tr>
+      </table>
+    </div>
+    <div class="box">
+      <h3>ALFA · 执行器故障 (马氏距离)</h3>
+      <table>
+        <tr><th>故障类型</th><th>序列</th><th>Mean AUC</th></tr>
+        <tr><td>方向舵</td><td>4</td><td class="hl">0.992</td></tr>
+        <tr><td>发动机</td><td>23</td><td class="hl">0.989</td></tr>
+        <tr><td>副翼</td><td>8</td><td>0.890</td></tr>
+        <tr><td>升降舵</td><td>2</td><td class="wr">0.691</td></tr>
+      </table>
+      <p style="margin-top:16px;color:#8b857c">硬故障近乎完美 (0.99+)；慢漂故障（气压计/GPS）和卡中位（升降舵）仍是瓶颈</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 9: DISCUSSION ═══════════ -->
+<div class="slide">
+  <h2>现有问题与讨论</h2>
+  <div class="two">
+    <div class="box green">
+      <h3 style="color:#0d6b4d">已验证成立的</h3>
+      <ul>
+        <li>无监督异常检测范式在无人机时序数据上非常有效</li>
+        <li>仅用正常数据训练的编码器可以学到有判别力的表示</li>
+        <li>残差窗口统计空间天然紧致——Galaxy 的紧致性假设正确</li>
+        <li>距离基础的评分机制有效且可解释</li>
+      </ul>
+    </div>
+    <div class="box amber">
+      <h3 style="color:#d4780a">想与 Galaxy 团队讨论的</h3>
+      <ul>
+        <li>Gravity Loss 是否总是趋向于单簇？什么条件下会形成多簇？</li>
+        <li>SMM 的多簇能力在什么类型的数据上才能被充分利用？</li>
+        <li>是否可以在 Gravity Loss 中加入簇间排斥项来防止坍缩？</li>
+        <li>时序数据的异常检测：预测残差路线 vs 直接表示路线？</li>
+        <li>如何从数据本身推断合适的 k 值？</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 10: FUTURE ═══════════ -->
+<div class="slide">
+  <h2>仍需解决的问题和改进方向</h2>
+  <div class="two">
+    <div class="box amber">
+      <h3 style="color:#d4780a">当前算法瓶颈</h3>
+      <table>
+        <tr><td>气压计慢漂</td><td>Basic 0.875 — 3s 窗口内信号 &lt;5m</td></tr>
+        <tr><td>GPS 冻结</td><td>Basic 0.892 — 部分序列保持最后有效值</td></tr>
+        <tr><td>升降舵卡中位</td><td>ALFA 0.691 — 仅操纵瞬间暴露</td></tr>
+        <tr><td>端侧部署</td><td>7.5s 历史缓冲占嵌入式内存</td></tr>
+      </table>
+    </div>
+    <div class="box blue">
+      <h3 style="color:#1a365d">可能的改进方向</h3>
+      <ul>
+        <li><strong>更长窗口</strong> — W=60(6s) 针对慢漂故障</li>
+        <li><strong>物理模型融合</strong> — 气压计/GPS 漂移用动力学辅助</li>
+        <li><strong>多传感器互校验</strong> — GPS vs 视觉, 气压计 vs IMU 积分</li>
+        <li><strong>故障分类</strong> — 当前只输出分数，可加分类头</li>
+        <li><strong>半监督</strong> — 极少量故障标注做微调</li>
+        <li><strong>自适应阈值</strong> — 按飞行阶段动态调整</li>
+      </ul>
+    </div>
+  </div>
+  <div class="note" style="margin-top:20px">
+    当前方法对硬故障（陀螺/加计/发动机失效）近乎完美 (0.99+)。<br>剩余挑战集中在物理上更难检测的慢漂故障——可能需超越纯数据驱动，引入飞行动力学先验。
+  </div>
+</div>
+
+</div><!-- /slides -->
+
+<div class="nav">
+  <button class="nav-btn" onclick="prev()">← PREV</button>
+  <button class="nav-btn" onclick="next()">NEXT →</button>
+</div>
+<div class="pg" id="pg"></div>
+
+<script>
+  let cur = 0;
+  const ss = document.querySelectorAll('.slide');
+  const N = ss.length;
+
+  function go(n) {
+    ss[cur].classList.remove('active');
+    cur = (n + N) % N;
+    ss[cur].classList.add('active');
+    document.getElementById('pg').textContent = (cur + 1) + ' / ' + N;
+    document.getElementById('progress').style.width = ((cur + 1) / N * 100) + '%';
+  }
+  function next() { go(cur + 1); }
+  function prev() { go(cur - 1); }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === ' ') {
+      e.preventDefault(); next();
+    }
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+      e.preventDefault(); prev();
+    }
+  });
+
+  go(0);
+</script>
+</body>
+</html>
